@@ -1,0 +1,16 @@
+{
+  "//": "Claude Code writes the mods API types to .claude-plugin/types/ the first time you load this folder with --plugin-dir; this config picks them up.",
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true,
+    "typeRoots": [".claude-plugin/types"]
+  },
+  "include": ["hooks/**/*.ts", "src/**/*.ts", "tests/**/*.ts"]
+}

@@ -1,0 +1,111 @@
+{
+  "name": "decision-router",
+  "version": "0.6.0",
+  "description": "Picks the Claude model for each turn: a decision model (Clef or Jev) describes the task, and a policy tuned for subscription limits chooses Haiku, Sonnet, Opus or Fable.",
+  "author": {
+    "name": "claude-decision-router contributors"
+  },
+  "license": "MIT",
+  "keywords": [
+    "router",
+    "model routing",
+    "subscription",
+    "clef",
+    "jev",
+    "mods"
+  ],
+  "userConfig": {
+    "mode": {
+      "type": "string",
+      "title": "Mode",
+      "description": "watch shows the pick and changes nothing; route switches the model; off does nothing. /router changes it at any time.",
+      "options": [
+        "watch",
+        "route",
+        "off"
+      ],
+      "default": "watch"
+    },
+    "backend": {
+      "type": "string",
+      "title": "Decision model",
+      "description": "clef-workers: Clef Flash on Cloudflare Workers AI. jev-api: Jev on TypeSafe's API (Jev runs only there). local: a System One server you run, such as Unsloth or Clef on SGLang. llamacpp: llama.cpp's llama-server running a decision model such as Clef or Laya.",
+      "options": [
+        "clef-workers",
+        "jev-api",
+        "local",
+        "llamacpp"
+      ],
+      "default": "clef-workers"
+    },
+    "preference": {
+      "type": "string",
+      "title": "Preference",
+      "description": "cost leans toward cheaper models and saves plan usage; quality leans toward stronger ones.",
+      "options": [
+        "cost",
+        "balanced",
+        "quality"
+      ],
+      "default": "balanced"
+    },
+    "allow_fable": {
+      "type": "boolean",
+      "title": "Allow Fable",
+      "description": "Let very hard, non-security tasks run on Fable 5.1. Fable may bill to usage credits rather than your plan.",
+      "default": false
+    },
+    "min_confidence": {
+      "type": "number",
+      "title": "Minimum confidence",
+      "description": "Below this confidence in the decision model's difficulty answer (0 flat, 1 certain, computed the same way for every backend), the current model is kept.",
+      "default": 0.45,
+      "min": 0,
+      "max": 1
+    },
+    "cloudflare_account_id": {
+      "type": "string",
+      "title": "Cloudflare account ID",
+      "description": "For clef-workers. Not a secret.",
+      "default": ""
+    },
+    "cloudflare_api_token": {
+      "type": "string",
+      "title": "Cloudflare API token",
+      "description": "Workers AI token for clef-workers. Scope it to Workers AI only. To clear a saved key, enter none.",
+      "sensitive": true
+    },
+    "typesafe_api_key": {
+      "type": "string",
+      "title": "TypeSafe API key",
+      "description": "For jev-api. To clear a saved key, enter none.",
+      "sensitive": true
+    },
+    "local_url": {
+      "type": "string",
+      "title": "Local server URL",
+      "description": "Address of the server for local or llamacpp. Empty uses http://127.0.0.1:8888/v1/systemone for local (Unsloth) and http://127.0.0.1:9931 for llamacpp. For llamacpp, the host and port are enough, for example http://10.0.0.9:9931.",
+      "default": ""
+    },
+    "local_api_key": {
+      "type": "string",
+      "title": "Local server API key",
+      "description": "Bearer key for local or llamacpp, such as an Unsloth sk-unsloth- token or llama-server's --api-key. Leave empty for a keyless server. To clear a saved key, enter none.",
+      "sensitive": true
+    },
+    "decision_model": {
+      "type": "string",
+      "title": "Decision model ID",
+      "description": "The model to ask. Empty uses each backend's default: clef-flash on Workers AI, jev-latest on TypeSafe, default on a local server (Unsloth's selected model), and none for llamacpp (a single-model llama-server needs no name). For Clef on SGLang, use Cloudflare/clef-flash.",
+      "default": ""
+    },
+    "timeout_ms": {
+      "type": "number",
+      "title": "Decision model timeout (ms)",
+      "description": "How long to wait for the decision model before keeping the current model. 0 picks it for you: 2500 for hosted backends, 8000 for local.",
+      "default": 0,
+      "min": 0,
+      "max": 30000
+    }
+  }
+}

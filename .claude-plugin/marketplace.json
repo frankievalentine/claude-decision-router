@@ -1,0 +1,12 @@
+{
+  "name": "decision-router-local",
+  "owner": { "name": "claude-decision-router contributors" },
+  "description": "Private marketplace for claude-decision-router, a per-turn Claude model router",
+  "plugins": [
+    {
+      "name": "decision-router",
+      "description": "Per-turn Claude model routing: a decision model describes the task, a subscription-aware policy picks the model.",
+      "source": "./plugin"
+    }
+  ]
+}
