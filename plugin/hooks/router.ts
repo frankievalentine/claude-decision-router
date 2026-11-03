@@ -10,7 +10,7 @@ import type { JournalRecord } from '../src/journal.ts';
 import { decide, escalate, initialState, POLICY } from '../src/policy.ts';
 import { requestEffort, routeFor, TIERS, tierOfModel } from '../src/tiers.ts';
 import type { Decision, Features, Mode, PolicyState, Preference, Route, Tier } from '../src/types.ts';
-import { bandText, footerLabel, renderBand, renderPane, switchToast, tuneAdvice, usageText } from '../src/view.ts';
+import { bandText, choiceOf, footerLabel, mainMenu, pinMenu, renderBand, renderPane, switchToast, tuneAdvice, usageText } from '../src/view.ts';
 import type { Actions, PaneTab, Snapshot } from '../src/view.ts';
 
 type Options = {
@@ -81,8 +81,8 @@ export function register(on: any, opts: Options) {
   on('session.start', async ($: any, e: any, next: any) => {
     await $.command.register({
       name: 'router',
-      description: 'Model routing: open the pane, or on, watch, route, off, pin <tier>, log [n], tune, status',
-      argumentHint: '[on|watch|route|off|pin <tier>|log [n]|tune|status]',
+      description: 'Model routing: quick menu, or pane, on, watch, route, off, pin <tier>, log [n], tune, status',
+      argumentHint: '[pane|on|watch|route|off|pin <tier>|log [n]|tune|status]',
       immediate: true,
     });
     await migrate($);
@@ -204,11 +204,14 @@ export function register(on: any, opts: Options) {
     if (verb === 'log') return { text: logText(journal, Number(arg) || 10) };
     if (verb === 'tune') return { text: tuneText(journal) };
     if (verb === 'status') return { text: statusText() };
-    if (args) return { text: `Unknown option "${args}".\n${HELP}` };
-    // No argument: the pane where the surface can draw it, the status as text where it cannot.
+    if (verb === 'pane' || verb === 'details') {
+      await openPane($);
+      return {};
+    }
+    if (args && verb !== 'menu') return { text: `Unknown option "${args}".\n${HELP}` };
+    // No argument: the quick menu where someone can answer it, the status as text where no one can.
     if (!(await $.session.surfaces()).length) return { text: statusText() };
-    paneTab = 'now';
-    await $.ui.open({ id: PANE, title: 'Router', focus: true, closeOnEscape: true });
+    await openMenu($);
     return {};
   });
 
@@ -224,28 +227,66 @@ export function register(on: any, opts: Options) {
     return label ? next({ ...e, props: { ...e.props, modes: [...e.props.modes, label] } }) : next(e);
   });
 
+  // In the terminal the band sits on the line under the prompt, below the permission mode ("auto mode"): the hint line
+  // is drawn as Claude Code draws it, and the band under it.
+  on('ui.render', { component: 'PromptHint' }, async ($: any, e: any, next: any) => {
+    const elements = $.ui.resolve(e);
+    const columns = Math.max(40, (e.viewport?.columns ?? 120) - 4);
+    return elements.Box({ flexDirection: 'column', children: [await next(e), renderBand(elements, snapshot(), actionsOf($), columns)] });
+  });
+
+  // The desktop app draws no hint line, so there the band stays above the prompt. The pane is the same everywhere.
   on('ui.render', { component: ['AbovePrompt', 'Pane'] }, async ($: any, e: any, next: any) => {
     if (e.component === 'Pane' && e.requestId !== PANE) return next(e);
     const elements = $.ui.resolve(e);
-    const actions: Actions = {
-      setMode: (m) => setMode($, m),
-      resume: () => setMode($, mode === 'off' ? 'watch' : mode),
-      pin: (tier) => pinNext($, tier),
-      open: () => openPane($),
-      close: () => closePane($),
-      tab: (tab) => showTab($, tab),
-      toggleDetail: () => toggleDetail($),
-    };
-    if (e.component === 'Pane') return renderPane(elements, snapshot(), paneTab, actions);
-    if (e.props.hasSurvey) return next(e);
+    if (e.component === 'Pane') return renderPane(elements, snapshot(), paneTab, actionsOf($));
+    if (e.surface === 'terminal' || e.props.hasSurvey) return next(e);
     return elements.Box({
       flexDirection: 'column',
-      children: [await next(e), renderBand(elements, snapshot(), actions, e.props.bodyColumns ?? 120)],
+      children: [await next(e), renderBand(elements, snapshot(), actionsOf($), e.props.bodyColumns ?? 120)],
     });
   });
 }
 
 // --- Functions that take $ (top level, so validation can follow the calls) ---
+
+function actionsOf($: any): Actions {
+  return {
+    setMode: (m) => setMode($, m),
+    resume: () => setMode($, mode === 'off' ? 'watch' : mode),
+    pin: (tier) => pinNext($, tier),
+    open: () => openPane($),
+    close: () => closePane($),
+    tab: (tab) => showTab($, tab),
+    toggleDetail: () => toggleDetail($),
+    menu: () => openMenu($),
+  };
+}
+
+// The quick menu, in Claude Code's own question dialog: numbered, answered from the keyboard. Pin next turn asks a
+// second question for the tier. Dismissing it changes nothing.
+async function openMenu($: any) {
+  let step = mainMenu(snapshot());
+  for (let i = 0; i < 2; i += 1) {
+    let answer: string;
+    try {
+      answer = await $.ui.ask(step.question, step.options.map((o) => o.label));
+    } catch {
+      return;
+    }
+    const choice = choiceOf(step, answer);
+    if (!choice) return;
+    if (choice.kind === 'pin-menu') {
+      step = pinMenu(snapshot());
+      continue;
+    }
+    if (choice.kind === 'mode') await setMode($, choice.mode);
+    else if (choice.kind === 'resume') await setMode($, mode === 'off' ? 'watch' : mode);
+    else if (choice.kind === 'pin') await pinNext($, choice.tier);
+    else await openPane($);
+    return;
+  }
+}
 
 // The plugin was called router-enhanced before 0.6. Its saved mode, band layout and decision log move to the new keys
 // the first time the renamed plugin starts; the old keys are left as they were.
@@ -541,7 +582,7 @@ function readCache(usage: any) {
   if (total > 0) cacheHit = read / total;
 }
 
-const HELP = 'Commands: /router (pane) | on | watch | route | off | pin <tier> | log [n] | tune | status';
+const HELP = 'Commands: /router (quick menu) | pane | on | watch | route | off | pin <tier> | log [n] | tune | status';
 
 function modeText(): string {
   return `Routing is ${mode === 'route' ? 'on' : mode === 'watch' ? 'in watch mode (picks shown, nothing changed)' : 'off'}.`;

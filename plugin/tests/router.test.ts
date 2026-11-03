@@ -36,6 +36,8 @@ function stubs(on: any, setup: Setup) {
     bodies: [] as any[],
     store: new Map<string, unknown>(),
     clock: null as any,
+    answers: [] as string[],
+    asked: [] as { question: string; options: string[] }[],
   }
   const clock = mock.clock(on)
   mock.env(on, setup.env ?? { CLOUDFLARE_ACCOUNT_ID: 'acct', CLOUDFLARE_API_TOKEN: 'token' })
@@ -80,7 +82,16 @@ function stubs(on: any, setup: Setup) {
     const usage = { input_tokens: 0, output_tokens: 10, cache_read_input_tokens: 900, cache_creation_input_tokens: 100 }
     return { turnId: e.turnId, index: e.index, answer: 'ok', toolUses: [], stopReason: 'end_turn', usage }
   })
-  on('tool.call', ($: any, e: any) => (e.command === 'fail' ? { result: 'boom', isError: true } : { result: 'ok' }))
+  on('tool.call', ($: any, e: any) => {
+    // The quick menu reaches Claude Code as an AskUserQuestion call: answer it from the queue, or dismiss it.
+    if (e.tool === 'AskUserQuestion') {
+      const q = e.questions[0]
+      seen.asked.push({ question: q.question, options: q.options.map((o: any) => o.label ?? o) })
+      const answer = seen.answers.shift()
+      return answer === undefined ? { deny: 'dismissed' } : { result: { answers: { [q.question]: answer } } }
+    }
+    return e.command === 'fail' ? { result: 'boom', isError: true } : { result: 'ok' }
+  })
   on('command.run', () => ({ text: '' }))
   on('session.surfaces', () => ({ value: ['terminal'] }))
   on('ui.open', ($: any, e: any) => {
@@ -106,10 +117,19 @@ async function turn($: any, turnId: string, text: string, steps = 1) {
 
 const start = ($: any) => $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
 const VIEWPORT = { columns: 160, rows: 40 }
-const BAND = {
+// The hint line under the prompt in the terminal, where the band sits below the permission mode.
+const HINT = {
+  plugin: 'decision-router',
+  component: 'PromptHint',
+  surface: 'terminal',
+  viewport: VIEWPORT,
+  props: { isDraft: false, isWorking: false, hint: '⏵⏵ auto mode on (shift+tab to cycle)' },
+} as const
+// The desktop app has no hint line: there the band is drawn above the prompt.
+const DESKTOP_BAND = {
   plugin: 'decision-router',
   component: 'AbovePrompt',
-  surface: 'terminal',
+  surface: 'desktop',
   viewport: VIEWPORT,
   props: { hasSurvey: false, isWorking: false, maxRows: 5, bodyColumns: 150, scroll: { offset: 0, bodyRows: 5 }, view: {} },
 } as const
@@ -267,12 +287,16 @@ test('no new request goes out while the last one is still running', async ($, on
 
 // --- The command ---
 
-test('bare /router opens the pane; unknown words get help', async ($, on) => {
+test('bare /router opens the quick menu; Details opens the pane; unknown words get help', async ($, on) => {
   const seen = stubs(on, { mode: 'watch' })
+  seen.answers.push('Details')
   await start($)
   const bare = await $.command.run({ command: 'router', args: '' })
   expect(bare).toEqual({})
+  expect(seen.asked[0].options).toEqual(['Route: switch models', 'Pin next turn', 'Turn off', 'Details'])
   expect(seen.opened.length).toBe(1)
+  await $.command.run({ command: 'router', args: 'pane' })
+  expect(seen.opened.length).toBe(2)
   expect(seen.logs).toContain('router command args: ""')
   const odd = await $.command.run({ command: 'router', args: 'banana' })
   expect(odd.text).toMatch(/^Unknown option "banana"\.\nCommands:/)
@@ -285,7 +309,9 @@ test('the band draws the meter, tier pill, activity, route, reason and readings'
   engineDraws(on)
   await start($)
   await turn($, 't1', 'debug the deadlock in the cache layer')
-  const ui = await $.ui.mount(BAND)
+  const ui = await $.ui.mount(HINT)
+  // Claude Code's own line comes first, with the band under it.
+  expect(await ui.find({ type: 'Text', text: 'prompt' })).toBeDefined()
   // Signal bars lit up to opus (the third of four) in its color, the fourth dim.
   expect((await ui.find({ type: 'Text', text: '▆' }))?.props.color).toBe('#e0708a')
   expect((await ui.find({ type: 'Text', text: '█' }))?.props.dimColor).toBe(true)
@@ -302,25 +328,78 @@ test('the band draws the meter, tier pill, activity, route, reason and readings'
   expect(await ui.find({ key: 'details' })).toBeDefined()
 })
 
-test('the hover row pins, turns routing off and adds the session row', async ($, on) => {
+test('the quick menu pins the next turn, switches modes, and turns routing back on', async ($, on) => {
   const seen = stubs(on, { mode: 'route', level: 0 })
   engineDraws(on)
   await start($)
   await turn($, 't1', 'list the files')
-  const ui = await $.ui.mount(BAND)
-  await ui.press({ key: 'band-pin-opus' })
+  // Pin: two steps, the tier on the second.
+  seen.answers.push('Pin next turn', 'opus')
+  await $.command.run({ command: 'router', args: '' })
+  expect(seen.asked[0].question).toBe('Routing is on (now haiku). What would you like to change?')
+  expect(seen.asked[1].options).toEqual(['haiku', 'sonnet', 'opus'])
+  const ui = await $.ui.mount(HINT)
   expect(await ui.find({ type: 'Text', text: '⏵ next turn: ' })).toBeDefined()
-  await ui.press({ key: 'band-unpin' })
+  // A pin already set can be cancelled from the same step.
+  seen.answers.push('Pin next turn (now opus)', 'Cancel the opus pin')
+  await $.command.run({ command: 'router', args: '' })
+  expect(seen.asked[3].options[0]).toBe('Cancel the opus pin')
   expect(await ui.find({ type: 'Text', text: '⏵ next turn: ' })).toBeUndefined()
-  await ui.press({ key: 'band-detail' })
+  // Off, then back on from the off-state menu.
+  seen.answers.push('Turn off')
+  await $.command.run({ command: 'router', args: '' })
+  expect(await ui.find({ type: 'Text', text: 'off' })).toBeDefined()
+  seen.answers.push('Watch: show picks only')
+  await $.command.run({ command: 'router', args: '' })
+  expect(seen.asked[5].options).toEqual(['Route: switch models', 'Watch: show picks only', 'Details'])
+  expect(seen.store.get('decision-router:mode')).toBe('watch')
+  // Router on the band opens the same menu.
+  seen.answers.push('Route: switch models')
+  await ui.press({ key: 'details' })
+  expect(seen.store.get('decision-router:mode')).toBe('route')
+})
+
+test('dismissing the quick menu changes nothing', async ($, on) => {
+  const seen = stubs(on, { mode: 'route', level: 0 })
+  await start($)
+  await $.command.run({ command: 'router', args: '' })
+  expect(seen.asked.length).toBe(1)
+  expect(seen.store.get('decision-router:mode')).toBe('route')
+})
+
+test('there is no hover row any more', async ($, on) => {
+  stubs(on, { mode: 'route', level: 0 })
+  engineDraws(on)
+  await start($)
+  await turn($, 't1', 'list the files')
+  const ui = await $.ui.mount(HINT)
+  expect(await ui.find({ key: 'band-pin-opus' })).toBeUndefined()
+  expect(await ui.find({ key: 'band-off' })).toBeUndefined()
+})
+
+test('in the terminal the band leaves the space above the prompt; the desktop app keeps it there', async ($, on) => {
+  stubs(on, { mode: 'route', level: 3 })
+  engineDraws(on)
+  await start($)
+  await turn($, 't1', 'debug the deadlock')
+  const above = await $.ui.mount({ ...DESKTOP_BAND, surface: 'terminal' })
+  expect(await above.find({ type: 'Text', text: ' opus ' })).toBeUndefined()
+  await above.unmount()
+  const desktop = await $.ui.mount(DESKTOP_BAND)
+  expect(await desktop.find({ type: 'Text', text: ' opus ' })).toBeDefined()
+})
+
+test('the session row is switched on from the pane', async ($, on) => {
+  const seen = stubs(on, { mode: 'route', level: 0 })
+  engineDraws(on)
+  await start($)
+  await turn($, 't1', 'list the files')
+  const pane = await $.ui.mount(PANE)
+  await pane.press({ key: 'band-detail' })
   expect(seen.store.get('decision-router:detail')).toBe(true)
+  const ui = await $.ui.mount(HINT)
   expect(await ui.find({ type: 'Text', text: 'session  ' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'haiku 1  ' })).toBeDefined()
-  await ui.press({ key: 'band-off' })
-  expect(await ui.find({ type: 'Text', text: 'off' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'Opus 5.5' })).toBeDefined()
-  await ui.press({ key: 'band-on' })
-  expect(seen.store.get('decision-router:mode')).toBe('watch')
 })
 
 test('a decision-model fault leads the band', async ($, on) => {
@@ -328,7 +407,7 @@ test('a decision-model fault leads the band', async ($, on) => {
   engineDraws(on)
   await start($)
   await turn($, 't1', 'refactor the parser')
-  const ui = await $.ui.mount(BAND)
+  const ui = await $.ui.mount(HINT)
   const warning = await ui.find({ type: 'Text', text: '⚠ Clef Flash: HTTP 503 from api.cloudflare.com' })
   expect(warning?.props.color).toBe('#f0b429')
   expect(await ui.find({ type: 'Text', text: 'keeping model' })).toBeDefined()
@@ -339,7 +418,7 @@ test('a narrow band drops readings before the route', async ($, on) => {
   engineDraws(on)
   await start($)
   await turn($, 't1', 'debug the deadlock in the cache layer')
-  const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 50 } })
+  const ui = await $.ui.mount({ ...HINT, viewport: { columns: 54, rows: 40 } })
   expect(await ui.find({ type: 'Text', text: 'Opus 5.5 · high' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'balanced (default)' })).toBeUndefined()
 })
@@ -372,7 +451,7 @@ test('the pane shows the next turn, why, pins with odds, session, plan and conte
   const seen = stubs(on, { mode: 'route', level: 3 })
   await start($)
   await turn($, 't1', 'track down the memory leak')
-  await $.command.run({ command: 'router', args: '' })
+  await $.command.run({ command: 'router', args: 'pane' })
   expect(seen.opened.length).toBe(1)
   const ui = await $.ui.mount(PANE)
   expect(await ui.find({ type: 'Text', text: 'ROUTING' })).toBeDefined()

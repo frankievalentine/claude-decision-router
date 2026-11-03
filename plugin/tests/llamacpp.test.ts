@@ -145,10 +145,10 @@ test('the band names llama.cpp', async ($, on) => {
   await $.turn.start({ turnId: 't1', text: 'track down the leak' })
   const ui = await $.ui.mount({
     plugin: 'decision-router',
-    component: 'AbovePrompt',
+    component: 'PromptHint',
     surface: 'terminal',
     viewport: { columns: 160, rows: 40 },
-    props: { hasSurvey: false, isWorking: true, maxRows: 5, bodyColumns: 150, scroll: { offset: 0, bodyRows: 5 }, view: {} },
+    props: { isDraft: false, isWorking: true, hint: 'esc to interrupt' },
   })
   // While choosing, the band names the decision model and its deadline.
   expect(await ui.find({ type: 'Text', text: 'llama.cpp · 8 s deadline' })).toBeDefined()

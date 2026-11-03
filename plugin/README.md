@@ -20,12 +20,12 @@ Decision models are good at describing tasks and poor at choosing models directl
 
 ## What you see
 
-![The band in each state](docs/band.png)
+![The band under the permission mode, and the quick menu](docs/band.png)
 
-- **The band above the prompt** (claude-router's design): signal bars lit up to the tier, the tier pill, the activity in orange, the model and effort, the reason (`↑ jump`, `↓ downgrade`, `= fits`, `… waiting to go up`), the decision model's evidence against the bar (`Laya 91% ≥ 82%`), your 5-hour and weekly plan usage, context fill and cache hit. Parts drop from the right as the terminal narrows; the tier and model never do. **Router** at the end opens the pane.
-- **Hover the band** for the second row: pin the next turn, Route or Turn off, and **2 rows** for a session summary (turns per tier, switches, corrections).
+- **The band**, on the line under the prompt, below the permission mode (`auto mode on`). In the desktop app, which has no such line, it sits above the prompt instead. Its design is claude-router's: signal bars lit up to the tier, the tier pill, the activity in orange, the model and effort, the reason (`↑ jump`, `↓ downgrade`, `= fits`, `… waiting to go up`), the decision model's evidence against the bar (`Laya 91% ≥ 82%`), your 5-hour and weekly plan usage, context fill and cache hit. Parts drop from the right as the terminal narrows; the tier and model never do.
+- **The quick menu**: `/router`, or **Router** at the end of the band. A numbered question in Claude Code's own dialog, answered from the keyboard: switch between route and watch, pin the next turn (a second step asks which model), turn routing off or on, or open the details. Esc closes it without changing anything.
 - **Faults lead the band**, in yellow, with where they happened: `⚠ Laya: timed out after 8 s at 10.0.0.9:8888 · keeping model`.
-- **The pane** (`/router` or Router), with Now, Log and Tune tabs:
+- **The pane** (`/router pane`, or Details in the menu), with Now, Log and Tune tabs. Every control is there too, including **Session row**, which adds a second band line with turns per tier and switches.
 
 ![The pane](docs/pane.png)
 
@@ -117,7 +117,8 @@ Set `backend` to `local`, `local_url` to `http://127.0.0.1:30000/v1/systemone`, 
 
 ## Commands
 
-- `/router`: open the pane (or print the status where nothing can be drawn). Unknown words print the list of commands
+- `/router`: the quick menu (or the status as text where no one can answer it). Unknown words print the list of commands
+- `/router pane`: the pane with Now, Log and Tune
 - `/router status`: the status as text, with the last decision-model error
 - `/router route | watch | off | on`: change the mode (remembered across sessions)
 - `/router pin haiku | sonnet | opus | fable`: run the next turn on that tier

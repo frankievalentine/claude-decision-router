@@ -2,8 +2,9 @@
 // snapshot of the router, and the actions buttons call, and returns element trees.
 //
 // The look is claude-router's (MIT, Alexei Ledenev): signal bars lit up to the tier, a tier pill, the activity in
-// orange italic, the route, the reason with its arrow, the evidence against the bar, and readings, separated by dots;
-// pins and the mode control in a row revealed on hover. Plan usage stands where claude-router shows dollars.
+// orange italic, the route, the reason with its arrow, the evidence against the bar, and readings, separated by dots.
+// Plan usage stands where claude-router shows dollars. Controls live in the quick menu (/router, or Router on the band)
+// and the pane, not in a row revealed on hover.
 
 import { mostLikely } from './features.ts';
 import type { JournalRecord } from './journal.ts';
@@ -47,6 +48,8 @@ export type Actions = {
   close: () => void;
   tab: (tab: PaneTab) => void;
   toggleDetail: () => void;
+  /** The quick menu: mode, pin, details. */
+  menu: () => void;
 };
 
 export type PaneTab = 'now' | 'log' | 'tune';
@@ -66,7 +69,6 @@ const COLOR = {
 };
 const BARS = '▂▄▆█';
 const SEPARATOR = '  ·  ';
-const GAP = '  ';
 // Space the band keeps for the trailing Router button.
 const ROUTER_BUTTON = 8;
 
@@ -347,30 +349,6 @@ export function bandSegments(s: Snapshot, a: Actions): Segment[] {
 
 const preferenceText = (s: Snapshot) => `${s.preference}${s.preference === 'balanced' ? ' (default)' : ''}`;
 
-// The row revealed under the pointer: pins and the mode control, and the one- or two-row choice. No digit hotkeys,
-// since a bare digit in an empty prompt would press them.
-function hoverSegments(s: Snapshot, a: Actions): Segment[] {
-  const on = s.mode !== 'off' && !s.paused;
-  const tiers = TIERS.filter((t) => t !== 'fable' || s.fable);
-  const pins = tiers.flatMap((t, i) => [
-    i ? part(' ') : null,
-    button({ key: `band-pin-${t}`, label: t, onPress: () => a.pin(t) }),
-  ]).filter(Boolean) as Part[];
-  return [
-    on ? segment(1, { ...part('pin next turn ', { dimColor: true }), priority: 2 }, pins) : null,
-    on
-      ? segment(
-          0,
-          { ...part(s.mode === 'route' ? 'routing on ' : 'watching ', { dimColor: true }), priority: 4 },
-          s.mode === 'watch' ? button({ key: 'band-route', label: 'Route', onPress: () => a.setMode('route') }) : null,
-          s.mode === 'watch' ? part(' ') : null,
-          button({ key: 'band-off', label: 'Turn off', onPress: () => a.setMode('off') }),
-        )
-      : null,
-    segment(s.detail ? 0 : 3, button({ key: 'band-detail', label: s.detail ? '1 row' : '2 rows', onPress: a.toggleDetail })),
-  ].filter(Boolean) as Segment[];
-}
-
 // --- Session summary, for the band's second row and the pane ---
 
 export type SessionSummary = {
@@ -434,20 +412,11 @@ export function renderBand(el: Elements, s: Snapshot, a: Actions, columns = 120)
   const row = (parts: Part[]) => el.Box({ children: parts.map((p) => draw(el, p)) });
   const kept = fitSegments(bandSegments(s, a), Math.max(0, columns - ROUTER_BUTTON));
   const line = kept.flatMap((seg, i) => (i ? [part(SEPARATOR, { dimColor: true }), ...seg.parts] : seg.parts));
-  line.push(part('  '), button({ key: 'details', label: 'Router', plain: true, onPress: a.open }));
-  const hover = fitSegments(hoverSegments(s, a), columns, GAP);
+  line.push(part('  '), button({ key: 'details', label: 'Router', plain: true, onPress: a.menu }));
   return el.Box({
     key: 'router-band',
     flexDirection: 'column',
-    children: [
-      row(line),
-      s.detail && s.mode !== 'off' ? row(sessionRow(s, columns)) : null,
-      el.Box({
-        display: 'none',
-        hover: { display: 'flex' },
-        children: hover.flatMap((seg, i) => (i ? [part(GAP), ...seg.parts] : seg.parts)).map((p) => draw(el, p)),
-      }),
-    ].filter(Boolean),
+    children: [row(line), s.detail && s.mode !== 'off' ? row(sessionRow(s, columns)) : null].filter(Boolean),
   });
 }
 
@@ -561,6 +530,18 @@ export function renderPane(el: Elements, s: Snapshot, tab: PaneTab, a: Actions):
         );
     }
     rows.push(line(label('Mode'), t(`${s.mode}${s.paused ? ' (paused)' : ''} · ${preferenceText(s)} · Fable ${s.fable ? 'allowed' : 'off'}`)));
+    rows.push(
+      line(
+        label('Band'),
+        el.Button({
+          key: 'band-detail',
+          label: s.detail ? 'Session row: on' : 'Session row: off',
+          variant: s.detail ? 'primary' : 'secondary',
+          onPress: a.toggleDetail,
+        }),
+        dim('  a second line with turns per tier and switches'),
+      ),
+    );
     const dist = cur?.decision.distribution ?? null;
     if (on)
       rows.push(
@@ -699,4 +680,57 @@ export function tuneAdvice(suggestion: 'raise' | 'lower' | 'keep', decisions: nu
   if (suggestion === 'raise') return 'You correct it upward more often: try preference quality.';
   if (suggestion === 'lower') return 'You correct it downward more often: try preference cost.';
   return 'Corrections are balanced: keep the current settings.';
+}
+
+// --- The quick menu ---
+
+/** One step of the quick menu: a question and its 2-4 options, each with what choosing it does. */
+export type MenuStep = { question: string; options: { label: string; then: MenuChoice }[] };
+export type MenuChoice =
+  | { kind: 'mode'; mode: Mode }
+  | { kind: 'resume' }
+  | { kind: 'pin-menu' }
+  | { kind: 'pin'; tier: Tier | null }
+  | { kind: 'details' };
+
+/** The first step, by state: what can change from here. */
+export function mainMenu(s: Snapshot): MenuStep {
+  const where = s.current ? ` (now ${s.current.decision.tier})` : '';
+  if (s.mode === 'off' || s.paused)
+    return {
+      question: `Routing is ${s.paused ? 'paused' : 'off'}. Turn it on?`,
+      options: [
+        { label: 'Route: switch models', then: { kind: 'mode', mode: 'route' } },
+        { label: 'Watch: show picks only', then: { kind: 'mode', mode: 'watch' } },
+        { label: 'Details', then: { kind: 'details' } },
+      ],
+    };
+  return {
+    question: `Routing is ${s.mode === 'route' ? 'on' : 'watching'}${where}. What would you like to change?`,
+    options: [
+      s.mode === 'route'
+        ? { label: 'Watch: show picks only', then: { kind: 'mode', mode: 'watch' } }
+        : { label: 'Route: switch models', then: { kind: 'mode', mode: 'route' } },
+      { label: s.pin ? `Pin next turn (now ${s.pin})` : 'Pin next turn', then: { kind: 'pin-menu' } },
+      { label: 'Turn off', then: { kind: 'mode', mode: 'off' } },
+      { label: 'Details', then: { kind: 'details' } },
+    ],
+  };
+}
+
+/** The pin step: the tiers, and a way to cancel a pin already set. At most four options. */
+export function pinMenu(s: Snapshot): MenuStep {
+  const tiers = TIERS.filter((t) => t !== 'fable' || s.fable).filter((t) => t !== s.pin);
+  const options: MenuStep['options'] = [
+    ...(s.pin ? [{ label: `Cancel the ${s.pin} pin`, then: { kind: 'pin', tier: null } as MenuChoice }] : []),
+    ...tiers.map((t) => ({ label: t, then: { kind: 'pin', tier: t } as MenuChoice })),
+  ].slice(0, 4);
+  return { question: 'Which model should the next turn run on?', options };
+}
+
+/** What an answer means: an option's label, or text typed under "Other" that names one. */
+export function choiceOf(step: MenuStep, answer: string): MenuChoice | null {
+  const typed = answer.trim().toLowerCase();
+  const hit = step.options.find((o) => o.label === answer) ?? step.options.find((o) => o.label.toLowerCase().startsWith(typed) && typed.length > 1);
+  return hit ? hit.then : null;
 }
