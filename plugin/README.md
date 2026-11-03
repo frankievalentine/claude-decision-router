@@ -43,13 +43,14 @@ Decision models are good at describing tasks and poor at choosing models directl
 
 ## Install (private)
 
-The archive holds a one-plugin marketplace, so Claude Code prompts for your keys on install and stores the secret ones in your system's secure credential store.
+The repository holds a one-plugin marketplace, so Claude Code prompts for your keys on install and stores the secret ones in your system's secure credential store.
 
-1. Unzip it, for example to `~/claude-decision-router`.
-2. In Claude Code: `/plugin marketplace add ~/claude-decision-router`
-3. Then: `/plugin install decision-router@decision-router-local`, and fill in the backend and its key when asked.
-4. Use **watch** mode for a few days: the line above the prompt shows what the router would pick and why, and nothing changes.
-5. When the picks look right: `/router route`.
+1. Add the marketplace in Claude Code, from a clone (`git clone https://github.com/frankievalentine/claude-decision-router.git ~/claude-decision-router`, then `/plugin marketplace add ~/claude-decision-router`) or straight from GitHub (`/plugin marketplace add frankievalentine/claude-decision-router`; the repository is private, so this needs access to it and GitHub credentials set up for git).
+2. Then: `/plugin install decision-router@decision-router-local`, and fill in the backend and its key when asked.
+3. Use **watch** mode for a few days: the band shows what the router would pick and why, and nothing changes.
+4. When the picks look right: `/router route`.
+
+A clone is read in place: after `git pull`, `/reload-plugins` picks up the change. A GitHub install runs its own copy: `claude plugin marketplace update decision-router-local`, then `claude plugin update decision-router@decision-router-local`.
 
 Requires Claude Code 2.1.299 or later (per-request model changes, and the `weight` and `tabular` text styles the band uses). Developed and tested with 2.1.317.
 
