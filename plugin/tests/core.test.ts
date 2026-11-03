@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { backendOf, confidenceOf, endpointFor, hostOf, parseAnswers, warmupBody } from '../src/classifier.ts'
-import { mostLikely, tierDistribution } from '../src/features.ts'
+import { mostLikely, tierConfidence, tierDistribution } from '../src/features.ts'
 import { append, markOverride, recordOf, tune } from '../src/journal.ts'
 import type { JournalRecord } from '../src/journal.ts'
 import { decide, escalate, usageCap, initialState } from '../src/policy.ts'
@@ -218,4 +218,15 @@ test('earlier backend names map to local, and hosts are named for errors', async
   const w = 'url' in e ? warmupBody(e) : null
   expect(w?.model).toBe('laya')
   expect(Object.keys(w?.questions ?? {}).length).toBe(1)
+})
+
+test('confidence in the tier: 0 when spread over the tiers in play, 1 when one holds it all', async () => {
+  const r = (x: number) => Math.round(x * 1000) / 1000
+  expect(tierConfidence({ sonnet: 1 })).toBe(1)
+  expect(r(tierConfidence({ haiku: 1 / 3, sonnet: 1 / 3, opus: 1 / 3 }))).toBe(0)
+  expect(r(tierConfidence({ haiku: 0.5, sonnet: 0.5 }))).toBe(0.25)
+  expect(r(tierConfidence({ sonnet: 0.6, opus: 0.4 }))).toBe(0.4)
+  // Fable mass counts toward the total, and the scale does not depend on whether Fable is allowed.
+  expect(r(tierConfidence({ sonnet: 0.45, opus: 0.45, fable: 0.1 }))).toBe(0.175)
+  expect(tierConfidence({})).toBe(0)
 })

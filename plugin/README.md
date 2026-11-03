@@ -83,7 +83,7 @@ All four use the same System One request format. Settings saved as `clef-local` 
 
 The router sends a small warm-up request at session start so the server loads its model before your first prompt (Unsloth takes 10 to 20 seconds the first time). Local backends wait up to 8 seconds per answer and hosted ones 2.5; `timeout_ms` overrides both. While a request is still running, no new one is sent, so a slow server never builds up a backlog.
 
-The router ignores each server's own `confidence` field, which Unsloth computes differently from Jev, and computes confidence from the answer's probabilities, so `min_confidence` means the same thing on every backend.
+The router ignores each server's own `confidence` field, which Unsloth computes differently from Jev, and computes confidence itself, from the tier the answer points to: 0 when the probability is spread evenly over Haiku, Sonnet and Opus, 1 when one tier holds it all. A task split between two difficulty levels that map to the same tier is therefore not low confidence, and `min_confidence` means the same thing on every backend.
 
 ### Clef or Laya with llama.cpp
 
@@ -128,8 +128,8 @@ Set `backend` to `local`, `local_url` to `http://127.0.0.1:30000/v1/systemone`, 
 - `/router status`: the status as text, with the last decision-model error
 - `/router route | watch | off | on`: change the mode (remembered across sessions)
 - `/router pin haiku | sonnet | opus | fable`: run the next turn on that tier
-- `/router log [n]`: the last decisions, with difficulty, confidence and corrections
-- `/router tune`: tier mix, how often you corrected the router up or down, decision-model latency, and which way to adjust
+- `/router log [n]`: the last decisions, with difficulty, confidence and corrections, and `leaned` where the decision model pointed at a different tier than the one used
+- `/router tune`: tier mix, where the decision model leaned before the confidence filter and the policy, how often you corrected the router up or down, decision-model latency, and which way to adjust
 
 ## Calibration
 

@@ -2,6 +2,7 @@
 // router picked, and what happened next (a manual /model override, an escalation). `tune` reads the records and
 // suggests which way the thresholds should move. Records hold labels and numbers only, never prompt text.
 
+import { mostLikely } from './features.ts';
 import { rank } from './tiers.ts';
 import type { Decision, Features, Mode, Reason, Tier } from './types.ts';
 
@@ -20,6 +21,11 @@ export type JournalRecord = {
   latencyMs: number | null;
   error: string | null;
   outcome: Outcome;
+  /** The tier the decision model leaned toward, before the confidence filter, the hold and the plan caps. */
+  lean?: Tier | null;
+  /** Both plan windows, of which `usedPercent` is the higher. Absent in records from before 0.8.1. */
+  fiveHour?: number | null;
+  sevenDay?: number | null;
 };
 
 export const MAX_RECORDS = 400;
@@ -30,6 +36,7 @@ export function recordOf(args: {
   decision: Decision;
   features: Features | null;
   usedPercent: number | null;
+  windows?: { fiveHour: number | null; sevenDay: number | null };
   latencyMs: number | null;
   error: string | null;
 }): JournalRecord {
@@ -48,6 +55,9 @@ export function recordOf(args: {
     latencyMs: args.latencyMs,
     error: args.error,
     outcome: 'ok',
+    lean: args.decision.distribution ? mostLikely(args.decision.distribution) : null,
+    fiveHour: args.windows?.fiveHour ?? null,
+    sevenDay: args.windows?.sevenDay ?? null,
   };
 }
 
@@ -77,6 +87,9 @@ export type Tuning = {
   latencyMedianMs: number | null;
   errorRate: number;
   tierShare: Partial<Record<Tier, number>>;
+  /** Where the decision model leaned, over the decisions that recorded it, and how many did. */
+  leanShare: Partial<Record<Tier, number>>;
+  leaned: number;
 };
 
 /**
@@ -94,6 +107,9 @@ export function tune(records: JournalRecord[]): Tuning {
     .sort((a, b) => a - b);
   const share: Partial<Record<Tier, number>> = {};
   for (const r of decided) share[r.tier] = (share[r.tier] ?? 0) + 1 / n;
+  const withLean = decided.filter((r) => r.lean);
+  const leanShare: Partial<Record<Tier, number>> = {};
+  for (const r of withLean) leanShare[r.lean as Tier] = (leanShare[r.lean as Tier] ?? 0) + 1 / withLean.length;
   const upRate = n ? up / n : 0;
   const downRate = n ? down / n : 0;
   return {
@@ -104,5 +120,7 @@ export function tune(records: JournalRecord[]): Tuning {
     latencyMedianMs: latencies.length ? latencies[Math.floor(latencies.length / 2)] : null,
     errorRate: records.length ? records.filter((r) => r.error).length / records.length : 0,
     tierShare: share,
+    leanShare,
+    leaned: withLean.length,
   };
 }

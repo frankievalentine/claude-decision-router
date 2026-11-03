@@ -35,6 +35,7 @@ const ACTIVITY_BIAS: Record<Activity, number> = {
 // Preference moves the demand thresholds: cost raises them (cheaper tiers), quality lowers them.
 const PREFERENCE_SHIFT = { cost: 0.06, balanced: 0, quality: -0.06 };
 
+const TIER_NAMES: Tier[] = ['haiku', 'sonnet', 'opus', 'fable'];
 const clamp = (x: number, lo = 0, hi = 1): number => Math.min(hi, Math.max(lo, x));
 
 function expected<K extends string>(dist: Distribution<K>, weight: Record<K, number>): number {
@@ -83,6 +84,20 @@ export function tierDistribution(
     dist.haiku = 0;
   }
   return dist;
+}
+
+/**
+ * Confidence in the tier pick, from the tier distribution the policy acts on: 0 when the probability is spread evenly
+ * over Haiku, Sonnet and Opus, 1 when one tier has it all. The difficulty answer alone misleads here: a task split
+ * between "easy" and "moderate" is uncertain about the level but not about the tier when both levels map to Sonnet.
+ * Always measured against three tiers, so `min_confidence` means the same whether or not Fable is allowed.
+ */
+export function tierConfidence(dist: Distribution<Tier>): number {
+  const masses = TIER_NAMES.map((t) => dist[t] ?? 0);
+  const total = masses.reduce((s, p) => s + p, 0);
+  if (total <= 0) return 0;
+  const peak = Math.max(...masses) / total;
+  return Math.min(1, Math.max(0, (3 * peak - 1) / 2));
 }
 
 /** The tier with the most probability; ties go to the cheaper tier. */

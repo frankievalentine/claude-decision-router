@@ -89,6 +89,9 @@ const journal: JournalRecord[] = tiers.map((tier, i) => ({
   latencyMs: 300 + i * 12,
   error: null,
   outcome: 'ok',
+  lean: i % 3 === 0 ? 'opus' : tier,
+  fiveHour: 34,
+  sevenDay: 61,
 }));
 
 const base: Snapshot = {

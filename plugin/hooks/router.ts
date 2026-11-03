@@ -4,7 +4,7 @@
 
 import { backendOf, buildBody, endpointFor, hostOf, parseAnswers, warmupBody } from '../src/classifier.ts';
 import type { Endpoint } from '../src/classifier.ts';
-import { tierDistribution } from '../src/features.ts';
+import { tierConfidence, tierDistribution } from '../src/features.ts';
 import { append, markEscalated, markOverride, recordOf, tune } from '../src/journal.ts';
 import type { JournalRecord } from '../src/journal.ts';
 import { decide, escalate, initialState, POLICY } from '../src/policy.ts';
@@ -327,7 +327,7 @@ async function openPane($: any) {
 }
 
 async function closePane($: any) {
-  await $.ui.close(PANE);
+  await $.ui.close({ id: PANE });
 }
 
 async function showTab($: any, tab: PaneTab) {
@@ -585,10 +585,13 @@ async function readUsage($: any): Promise<number | null> {
 async function decideTurn($: any, advice: Advice) {
   const contextTokens = await readUsage($);
   const preference = pick(options.preference, ['cost', 'balanced', 'quality'] as const, 'balanced') as Preference;
-  const f = advice.features;
+  const allowFable = options.allow_fable === true;
+  const distribution = advice.features ? tierDistribution(advice.features, { preference, allowFable }) : null;
+  // The confidence that gates the pick is the one in the tier, so it is also the one the band, pane and log show.
+  const f = advice.features && distribution ? { ...advice.features, confidence: tierConfidence(distribution) } : advice.features;
   const decision = decide({
     state: policy,
-    distribution: f ? tierDistribution(f, { preference, allowFable: options.allow_fable === true }) : null,
+    distribution,
     confidence: f?.confidence ?? 0,
     continuation: f?.continuation ?? 0,
     usage: { usedPercent },
@@ -614,7 +617,7 @@ async function pinTurn($: any, tier: Tier) {
 }
 
 async function record($: any, decision: Decision, f: Features | null, latencyMs: number | null, error: string | null) {
-  journal = append(journal, recordOf({ at: Date.now(), mode, decision, features: f, usedPercent, latencyMs, error }));
+  journal = append(journal, recordOf({ at: Date.now(), mode, decision, features: f, usedPercent, windows, latencyMs, error }));
   await $.store.set(JOURNAL_KEY, journal);
 }
 
@@ -735,7 +738,8 @@ function logText(records: JournalRecord[], n: number): string {
     .map((r) => {
       const when = new Date(r.at).toISOString().slice(5, 16).replace('T', ' ');
       const what = r.error ? `error: ${r.error}` : `${r.activity ?? '-'} d${r.difficulty ?? '-'} c${r.confidence ?? '-'}`;
-      return `${when}  ${r.mode.padEnd(5)} ${r.tier.padEnd(6)} ${r.reason.padEnd(14)} ${what}${r.outcome === 'ok' ? '' : `  [${r.outcome}]`}`;
+      const lean = r.lean && r.lean !== r.tier ? `  leaned ${r.lean}` : '';
+      return `${when}  ${r.mode.padEnd(5)} ${r.tier.padEnd(6)} ${r.reason.padEnd(14)} ${what}${lean}${r.outcome === 'ok' ? '' : `  [${r.outcome}]`}`;
     })
     .join('\n');
 }
@@ -745,10 +749,16 @@ function tuneText(records: JournalRecord[]): string {
   const share = Object.entries(t.tierShare)
     .map(([tier, s]) => `${tier} ${Math.round((s ?? 0) * 100)}%`)
     .join(', ');
+  const lean = Object.entries(t.leanShare)
+    .map(([tier, s]) => `${tier} ${Math.round((s ?? 0) * 100)}%`)
+    .join(', ');
   return [
     `Decisions: ${t.decisions}. Tier mix: ${share || 'none'}.`,
+    t.leaned ? `The decision model leaned (before the confidence filter and the policy): ${lean} of ${t.leaned}.` : '',
     `Corrected upward: ${Math.round(t.upRate * 100)}%. Corrected downward: ${Math.round(t.downRate * 100)}%.`,
     `Decision model: median ${t.latencyMedianMs ?? '-'} ms, errors ${Math.round(t.errorRate * 100)}%.`,
     tuneAdvice(t.suggestion, t.decisions),
-  ].join('\n');
+  ]
+    .filter(Boolean)
+    .join('\n');
 }

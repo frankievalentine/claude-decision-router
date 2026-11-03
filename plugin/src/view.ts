@@ -660,13 +660,14 @@ export function renderPane(el: Elements, s: Snapshot, tab: PaneTab, a: Actions, 
           : dim(`${r.activity ? ACTIVITY_VERB[r.activity as Activity] ?? r.activity : '-'} · difficulty ${r.difficulty ?? '-'} · confidence ${r.confidence ?? '-'}`);
         const outcome = r.outcome === 'ok' ? null : t(`  [${r.outcome}]`, { color: COLOR.warn });
         const reason = SHORT_REASON[r.reason] ?? r.reason;
+        const leaned = r.lean && r.lean !== r.tier ? t(`  leaned ${r.lean}`, { color: TIER_COLOR[r.lean] }) : null;
         // Where the pane is wide the entry is one line; narrower, the detail drops to a second line under the tier.
         if (columns >= LOG_WIDE)
-          return line(dim(`${when}  `), t(r.tier.padEnd(7), { weight: 'bold', color: TIER_COLOR[r.tier] }), dim(reason.padEnd(16)), what, outcome);
+          return line(dim(`${when}  `), t(r.tier.padEnd(7), { weight: 'bold', color: TIER_COLOR[r.tier] }), dim(reason.padEnd(16)), what, leaned, outcome);
         return el.Box({
           flexDirection: 'column',
           children: [
-            line(dim(`${when}  `), t(r.tier, { weight: 'bold', color: TIER_COLOR[r.tier] }), dim(`  ${reason}`), outcome),
+            line(dim(`${when}  `), t(r.tier, { weight: 'bold', color: TIER_COLOR[r.tier] }), dim(`  ${reason}`), leaned, outcome),
             line(t('  '), el.Box({ flexDirection: 'row', flexShrink: 1, children: [what] })),
           ],
         });
@@ -692,6 +693,21 @@ export function renderPane(el: Elements, s: Snapshot, tab: PaneTab, a: Actions, 
             t(`  ${pct(share, 100)}`, { tabular: true }),
           ),
         );
+    }
+    if (u.leaned) {
+      rows.push(t(' '));
+      rows.push(line(dim(`  The decision model leaned, before the confidence filter (${u.leaned}):`)));
+      for (const x of TIERS) {
+        const share = u.leanShare[x] ?? 0;
+        if (share > 0)
+          rows.push(
+            line(
+              t(`  ${x.padEnd(8)}`, { weight: 'bold', color: TIER_COLOR[x] }),
+              t(blocks(share, barWidth), { color: TIER_COLOR[x] }),
+              t(`  ${pct(share, 100)}`, { tabular: true }),
+            ),
+          );
+      }
     }
     rows.push(t(' '));
     rows.push(t(tuneAdvice(u.suggestion, u.decisions)));

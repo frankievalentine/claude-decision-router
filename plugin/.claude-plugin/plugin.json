@@ -1,6 +1,6 @@
 {
   "name": "decision-router",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Picks the Claude model for each turn: a decision model (Clef or Jev) describes the task, and a policy tuned for subscription limits chooses Haiku, Sonnet, Opus or Fable.",
   "author": {
     "name": "claude-decision-router contributors"
@@ -58,7 +58,7 @@
     "min_confidence": {
       "type": "number",
       "title": "Minimum confidence",
-      "description": "Below this confidence in the decision model's difficulty answer (0 flat, 1 certain, computed the same way for every backend), the current model is kept.",
+      "description": "Below this confidence in the tier the decision model points to (0 spread evenly over the tiers, 1 certain, computed the same way for every backend), the current model is kept. A task split between two difficulty levels that map to the same tier still counts as certain.",
       "default": 0.45,
       "min": 0,
       "max": 1

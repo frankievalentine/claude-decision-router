@@ -39,6 +39,7 @@ function stubs(on: any, setup: Setup) {
     answers: [] as string[],
     asked: [] as { question: string; options: string[] }[],
     config: [] as { key: string; value: unknown }[],
+    closed: [] as unknown[],
   }
   const clock = mock.clock(on)
   mock.env(on, setup.env ?? { CLOUDFLARE_ACCOUNT_ID: 'acct', CLOUDFLARE_API_TOKEN: 'token' })
@@ -104,7 +105,10 @@ function stubs(on: any, setup: Setup) {
     seen.opened.push(e.id ?? e.options?.id ?? 'pane')
     return { value: { isPlaced: true } }
   })
-  on('ui.close', () => ({ value: undefined }))
+  on('ui.close', ($: any, e: any) => {
+    seen.closed.push(e.id)
+    return { value: undefined }
+  })
   seen.clock = clock
   return seen
 }
@@ -540,7 +544,66 @@ test('/router test names a missing key and where to put it', async ($, on) => {
   expect((await run($, 'test')).text).toContain('No Cloudflare API token found')
 })
 
+// --- What the journal keeps, and the confidence that gates the pick ---
+
+// Difficulty split between two levels, both of which are Sonnet work at a single spot with some reasoning.
+const SAME_TIER = {
+  difficulty: { type: 'score', probabilities: { '0': 0, '1': 0.5, '2': 0.5, '3': 0, '4': 0 } },
+  reasoning: { type: 'score', probabilities: { '0': 0, '1': 0, '2': 1, '3': 0 } },
+  scope: { type: 'choice', probabilities: { spot: 1 } },
+  activity: { type: 'choice', probabilities: { code: 1 } },
+}
+// Difficulty split between a Sonnet level and an Opus level: the tier itself is in doubt.
+const SPLIT_TIERS = { ...SAME_TIER, difficulty: { type: 'score', probabilities: { '0': 0, '1': 0.4, '2': 0, '3': 0.6, '4': 0 } } }
+const withAnswers = (extra: Record<string, unknown>) => () => ({
+  value: { status: 200, ok: true, headers: {}, text: JSON.stringify(answers(2, extra)) },
+})
+
+test('a task split between two levels of the same tier is not low confidence', async ($, on) => {
+  const seen = stubs(on, { mode: 'route', fetch: withAnswers(SAME_TIER) })
+  await start($)
+  await turn($, 't1', 'rename the helper in the settings file')
+  const [record] = seen.store.get('decision-router:journal') as any[]
+  // The difficulty answer alone is 0.375, under the 0.45 bar; the tier is certain.
+  expect(record.reason).toBe('first')
+  expect(record.confidence).toBe(1)
+})
+
+test('a split between tiers is low confidence, and the journal keeps which way the model leaned', async ($, on) => {
+  const seen = stubs(on, { mode: 'route', fetch: withAnswers(SPLIT_TIERS) })
+  await start($)
+  await turn($, 't1', 'rework the sync engine')
+  const [record] = seen.store.get('decision-router:journal') as any[]
+  expect(record).toMatchObject({ tier: 'sonnet', reason: 'low-confidence', lean: 'opus' })
+  // The Log tab and /router log and /router tune all say it: the filter kept Sonnet, the model leaned Opus.
+  const pane = await $.ui.mount(PANE)
+  await pane.press({ key: 'tab-log' })
+  expect(await pane.find({ type: 'Text', text: 'leaned opus' })).toBeDefined()
+  await pane.press({ key: 'tab-tune' })
+  expect(await pane.find({ type: 'Text', text: /leaned, before the confidence filter \(1\)/ })).toBeDefined()
+  expect((await run($, 'log')).text).toContain('leaned opus')
+  expect((await run($, 'tune')).text).toContain('leaned (before the confidence filter and the policy): opus 100% of 1')
+})
+
+test('each record keeps both plan windows, not only the higher one', async ($, on) => {
+  const seen = stubs(on, { mode: 'route', level: 2, usage: 10 })
+  await start($)
+  await turn($, 't1', 'explain the cache layer')
+  const [record] = seen.store.get('decision-router:journal') as any[]
+  // The stub reports 10% of the 5-hour window and 5% of the weekly one; usedPercent is the higher.
+  expect(record).toMatchObject({ fiveHour: 10, sevenDay: 5, usedPercent: 10 })
+})
+
 // --- The pane ---
+
+test('the Close button closes the pane it opened', async ($, on) => {
+  const seen = stubs(on, { mode: 'route', level: 0 })
+  await start($)
+  const pane = await $.ui.mount(PANE)
+  await pane.press({ key: 'close' })
+  // $.ui.close names the pane by { id }; a bare string would close nothing.
+  expect(seen.closed).toEqual(['decision-router'])
+})
 
 test('a narrow pane stacks labels above values, wraps its rows and shortens its bars', async ($, on) => {
   stubs(on, { mode: 'route', level: 3 })
@@ -610,7 +673,8 @@ test('the pane shows the next turn, why, pins with odds, session, plan and conte
   expect((await ui.find({ key: 'pin-haiku' }))?.props.label).toBe('▶ haiku 0%')
   await ui.press({ key: 'tab-log' })
   expect(await ui.find({ type: 'Text', text: 'LOG' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /^debugging · difficulty 2\.9 · confidence 0\.88$/ })).toBeDefined()
+  // Confidence is in the tier, and the whole probability is on Opus.
+  expect(await ui.find({ type: 'Text', text: /^debugging · difficulty 2\.9 · confidence 1$/ })).toBeDefined()
   await ui.press({ key: 'tab-tune' })
   expect(await ui.find({ type: 'Text', text: /Not enough decisions yet/ })).toBeDefined()
 })
