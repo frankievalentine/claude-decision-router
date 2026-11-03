@@ -172,14 +172,6 @@ export function bandText(s: Snapshot): string {
     .concat(pinned);
 }
 
-/** The label Claude Code shows in the prompt footer, or null for nothing. */
-export function footerLabel(s: Snapshot): string | null {
-  if (s.paused) return 'router paused';
-  if (s.mode === 'off') return 'routing off';
-  if (s.mode === 'watch') return 'router watching';
-  return null;
-}
-
 // --- Segments: parts that drop, highest priority first, when the band is narrow ---
 
 type Style = Record<string, unknown>;

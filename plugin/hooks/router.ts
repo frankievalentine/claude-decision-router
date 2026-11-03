@@ -10,7 +10,7 @@ import type { JournalRecord } from '../src/journal.ts';
 import { decide, escalate, initialState, POLICY } from '../src/policy.ts';
 import { requestEffort, routeFor, TIERS, tierOfModel } from '../src/tiers.ts';
 import type { Decision, Features, Mode, PolicyState, Preference, Route, Tier } from '../src/types.ts';
-import { bandText, choiceOf, footerLabel, mainMenu, pinMenu, renderBand, renderPane, switchToast, tuneAdvice, usageText } from '../src/view.ts';
+import { bandText, choiceOf, mainMenu, pinMenu, renderBand, renderPane, switchToast, tuneAdvice, usageText } from '../src/view.ts';
 import type { Actions, PaneTab, Snapshot } from '../src/view.ts';
 
 type Options = {
@@ -219,12 +219,6 @@ export function register(on: any, opts: Options) {
   on('ui.render', { component: 'Spinner' }, async ($: any, e: any, next: any) => {
     if (!choosing || e.props.message !== null) return next(e);
     return next({ ...e, props: { ...e.props, message: 'Choosing model' } });
-  });
-
-  // Watching, paused or off stays visible in the prompt footer.
-  on('ui.render', { component: 'SessionMode' }, async ($: any, e: any, next: any) => {
-    const label = footerLabel(snapshot());
-    return label ? next({ ...e, props: { ...e.props, modes: [...e.props.modes, label] } }) : next(e);
   });
 
   // In the terminal the band sits on the line under the prompt, below the permission mode ("auto mode"): the hint line

@@ -437,14 +437,6 @@ test('the spinner says Choosing model while the decision model answers', async (
   expect(await after.find({ type: 'Text', text: 'Choosing model' })).toBeUndefined()
 })
 
-test('watching shows in the prompt footer', async ($, on) => {
-  stubs(on, { mode: 'watch' })
-  on('ui.render', ($: any, e: any) => ({ type: 'Text', props: {}, children: [(e.props?.modes ?? []).join(',')] }))
-  await start($)
-  const footer = await $.ui.mount({ plugin: 'decision-router', component: 'SessionMode', surface: 'terminal', viewport: VIEWPORT, props: { modes: [] } })
-  expect(await footer.find({ type: 'Text', text: 'router watching' })).toBeDefined()
-})
-
 // --- The pane ---
 
 test('the pane shows the next turn, why, pins with odds, session, plan and context', async ($, on) => {

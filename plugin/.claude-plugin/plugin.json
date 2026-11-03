@@ -1,6 +1,6 @@
 {
   "name": "decision-router",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Picks the Claude model for each turn: a decision model (Clef or Jev) describes the task, and a policy tuned for subscription limits chooses Haiku, Sonnet, Opus or Fable.",
   "author": {
     "name": "claude-decision-router contributors"

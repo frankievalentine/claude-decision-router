@@ -29,7 +29,7 @@ Decision models are good at describing tasks and poor at choosing models directl
 
 ![The pane](docs/pane.png)
 
-- **The spinner** reads "Choosing model" while the decision model answers, and **the prompt footer** shows "router watching", "router paused" or "routing off".
+- **The spinner** reads "Choosing model" while the decision model answers.
 - **A toast** names every model switch with its reason and evidence: `Model changed: Haiku 5.5 · low → Opus 5.5 · xhigh · jump (Laya 92% ≥ 75%)`.
 
 ## The policy
