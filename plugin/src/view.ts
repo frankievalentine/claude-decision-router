@@ -428,9 +428,20 @@ function blocks(fraction: number | null, width = BLOCK): string {
   return '█'.repeat(n) + '░'.repeat(width - n);
 }
 
-export function renderPane(el: Elements, s: Snapshot, tab: PaneTab, a: Actions): El {
+/** Below this many columns the pane stacks each label above its value. */
+const NARROW = 56;
+/** Below this many columns a Log entry takes two lines. */
+const LOG_WIDE = 90;
+
+export function renderPane(el: Elements, s: Snapshot, tab: PaneTab, a: Actions, columns = 60): El {
+  const narrow = columns < NARROW;
+  const barWidth = Math.max(6, Math.min(BLOCK, columns - 30));
   const t = (children: string, style: Style = {}) => el.Text({ ...style, children });
+  // A row of text: a long text shrinks and wraps inside its own cell, so it stays under its column.
   const line = (...children: (El | null | false)[]) => el.Box({ flexDirection: 'row', children: children.filter(Boolean) });
+  // A row of buttons, which cannot shrink: they wrap onto the next line instead of running past the pane.
+  const wrapRow = (...children: (El | null | false)[]) =>
+    el.Box({ flexDirection: 'row', flexWrap: 'wrap', children: children.filter(Boolean) });
   const head = (text: string) => t(text, { weight: 'bold', color: COLOR.head });
   const dim = (text: string) => t(text, { dimColor: true });
   const gap = () => t(' ');
@@ -442,7 +453,7 @@ export function renderPane(el: Elements, s: Snapshot, tab: PaneTab, a: Actions):
     : t(`${s.label} ready${s.latencyMs !== null ? ` · ${s.latencyMs} ms` : ''}`, { color: 'green' });
 
   const header = [
-    line(
+    wrapRow(
       head('ROUTING'),
       gap(),
       radio('mode-route', 'on', on && s.mode === 'route', () => (s.paused ? a.resume() : a.setMode('route'))),
@@ -450,10 +461,9 @@ export function renderPane(el: Elements, s: Snapshot, tab: PaneTab, a: Actions):
       radio('mode-watch', 'watch', on && s.mode === 'watch', () => a.setMode('watch')),
       gap(),
       radio('mode-off', 'off', !on, () => a.setMode('off')),
-      gap(),
-      status,
     ),
-    line(
+    status,
+    wrapRow(
       ...(['now', 'log', 'tune'] as const).flatMap((id, i) => [
         i ? gap() : null,
         el.Button({
@@ -481,16 +491,34 @@ export function renderPane(el: Elements, s: Snapshot, tab: PaneTab, a: Actions):
     return t(text.padEnd(11));
   }
 
+  // A labeled row: the label beside its value where there is room, above it where there is not. The value is its own
+  // cell, so a long one wraps inside its column instead of running back under the label; one made of buttons wraps
+  // between them.
+  function fieldOf(wrap: boolean, name: string, children: (El | null | false)[]): El {
+    const value = el.Box({ flexDirection: 'row', flexShrink: 1, ...(wrap ? { flexWrap: 'wrap' } : {}), children: children.filter(Boolean) });
+    if (!narrow) return el.Box({ flexDirection: 'row', children: [label(name), value] });
+    return el.Box({
+      flexDirection: 'column',
+      children: [name ? dim(name) : null, el.Box({ flexDirection: 'row', children: [t('  '), value] })].filter(Boolean),
+    });
+  }
+  function field(name: string, ...children: (El | null | false)[]): El {
+    return fieldOf(false, name, children);
+  }
+  function buttons(name: string, ...children: (El | null | false)[]): El {
+    return fieldOf(true, name, children);
+  }
+
   function nowTab(): El[] {
     const rows: El[] = [];
     const cur = s.current;
     if (!cur) {
-      rows.push(line(label('Next turn'), dim(s.paused ? 'paused: model picked by hand' : 'waiting for the first prompt')));
+      rows.push(field('Next turn', dim(s.paused ? 'paused: model picked by hand' : 'waiting for the first prompt')));
     } else {
       const { decision, route, features } = cur;
       rows.push(
-        line(
-          label(s.mode === 'watch' ? 'Would use' : 'Next turn'),
+        field(
+          s.mode === 'watch' ? 'Would use' : 'Next turn',
           t('▌', { color: TIER_COLOR[decision.tier] }),
           t(decision.tier, { weight: 'bold', color: TIER_COLOR[decision.tier] }),
           t('  '),
@@ -500,19 +528,19 @@ export function renderPane(el: Elements, s: Snapshot, tab: PaneTab, a: Actions):
       const acts = topActivity(features);
       if (acts.length)
         rows.push(
-          line(
-            label('Activity'),
+          field(
+            'Activity',
             t(ACTIVITY_VERB[acts[0][0]], { color: COLOR.activity, italic: true }),
             t(` ${pct(acts[0][1], 100)}`),
             acts.length > 1 ? dim(`   ${acts.slice(1, 3).map(([k, p]) => `${ACTIVITY_VERB[k]} ${pct(p, 100)}`).join(' · ')}`) : null,
           ),
         );
-      rows.push(line(label('Why'), t(LONG_REASON[decision.reason] ?? decision.reason)));
+      rows.push(field('Why', t(LONG_REASON[decision.reason] ?? decision.reason)));
       const support = typeof decision.bar === 'number' && typeof decision.mass === 'number';
       if (support)
         rows.push(
-          line(
-            label(''),
+          field(
+            '',
             dim(
               `${s.label} gave ${pct(decision.mass, 100)} (needs ${pct(decision.bar, 100)})${
                 features ? ` · confidence ${features.confidence.toFixed(2)}` : ''
@@ -521,24 +549,24 @@ export function renderPane(el: Elements, s: Snapshot, tab: PaneTab, a: Actions):
           ),
         );
     }
-    rows.push(line(label('Mode'), t(`${s.mode}${s.paused ? ' (paused)' : ''} · ${preferenceText(s)} · Fable ${s.fable ? 'allowed' : 'off'}`)));
+    rows.push(field('Mode', t(`${s.mode}${s.paused ? ' (paused)' : ''} · ${preferenceText(s)} · Fable ${s.fable ? 'allowed' : 'off'}`)));
     rows.push(
-      line(
-        label('Band'),
+      buttons(
+        'Band',
         el.Button({
           key: 'band-detail',
           label: s.detail ? 'Session row: on' : 'Session row: off',
           variant: s.detail ? 'primary' : 'secondary',
           onPress: a.toggleDetail,
         }),
-        dim('  a second line with turns per tier and switches'),
+        dim('  turns and switches'),
       ),
     );
     const dist = cur?.decision.distribution ?? null;
     if (on)
       rows.push(
-        line(
-          label('Pin next'),
+        buttons(
+          'Pin next',
           ...TIERS.filter((x) => x !== 'fable' || s.fable).flatMap((x, i) => {
             const p = dist?.[x];
             const chosen = s.pin === x;
@@ -552,7 +580,6 @@ export function renderPane(el: Elements, s: Snapshot, tab: PaneTab, a: Actions):
               }),
             ];
           }),
-          dim('  next turn only'),
         ),
       );
 
@@ -570,11 +597,11 @@ export function renderPane(el: Elements, s: Snapshot, tab: PaneTab, a: Actions):
       ),
     );
     if (sum.turns) {
-      rows.push(line(t('  '), ...sum.strip.map((x) => t('█', { color: TIER_COLOR[x] }))));
+      rows.push(line(t('  '), ...sum.strip.slice(-Math.max(8, columns - 4)).map((x) => t('█', { color: TIER_COLOR[x] }))));
       rows.push(
-        line(
+        wrapRow(
           t('  '),
-          ...TIERS.filter((x) => sum.counts[x]).flatMap((x) => [t('■ ', { color: TIER_COLOR[x] }), t(`${x} ${sum.counts[x]}   `)]),
+          ...TIERS.filter((x) => sum.counts[x]).map((x) => line(t('■ ', { color: TIER_COLOR[x] }), t(`${x} ${sum.counts[x]}   `))),
         ),
       );
       if (sum.lastSwitch)
@@ -598,7 +625,7 @@ export function renderPane(el: Elements, s: Snapshot, tab: PaneTab, a: Actions):
       rows.push(
         line(
           t(`  ${name.padEnd(9)}`),
-          t(blocks(value === null ? null : value / 100), { color: level(value, 50, 75) }),
+          t(blocks(value === null ? null : value / 100, barWidth), { color: level(value, 50, 75) }),
           t(`  ${value === null ? 'not reported yet' : pct(value)}`, { tabular: true }),
         ),
       );
@@ -606,15 +633,15 @@ export function renderPane(el: Elements, s: Snapshot, tab: PaneTab, a: Actions):
 
     rows.push(t(' '));
     rows.push(
-      line(
-        t('Context    '),
-        t(blocks(s.contextPercent === null ? null : s.contextPercent / 100), { color: level(s.contextPercent) }),
+      field(
+        'Context',
+        t(blocks(s.contextPercent === null ? null : s.contextPercent / 100, barWidth), { color: level(s.contextPercent) }),
         t(`  ${s.contextPercent === null ? '?' : pct(s.contextPercent)}`, { tabular: true }),
       ),
     );
     rows.push(
-      line(
-        t('Cache      '),
+      field(
+        'Cache',
         s.cacheHit === null ? dim('no reply yet') : t(`${pct(s.cacheHit, 100)} reused on the last reply`, { color: s.cacheHit >= 0.6 ? 'green' : 'yellow' }),
       ),
     );
@@ -631,13 +658,18 @@ export function renderPane(el: Elements, s: Snapshot, tab: PaneTab, a: Actions):
         const what = r.error
           ? t(`error: ${r.error}`, { color: COLOR.warn })
           : dim(`${r.activity ? ACTIVITY_VERB[r.activity as Activity] ?? r.activity : '-'} · difficulty ${r.difficulty ?? '-'} · confidence ${r.confidence ?? '-'}`);
-        return line(
-          dim(`${when}  `),
-          t(r.tier.padEnd(7), { weight: 'bold', color: TIER_COLOR[r.tier] }),
-          dim(`${(SHORT_REASON[r.reason] ?? r.reason).padEnd(16)}`),
-          what,
-          r.outcome === 'ok' ? null : t(`  [${r.outcome}]`, { color: COLOR.warn }),
-        );
+        const outcome = r.outcome === 'ok' ? null : t(`  [${r.outcome}]`, { color: COLOR.warn });
+        const reason = SHORT_REASON[r.reason] ?? r.reason;
+        // Where the pane is wide the entry is one line; narrower, the detail drops to a second line under the tier.
+        if (columns >= LOG_WIDE)
+          return line(dim(`${when}  `), t(r.tier.padEnd(7), { weight: 'bold', color: TIER_COLOR[r.tier] }), dim(reason.padEnd(16)), what, outcome);
+        return el.Box({
+          flexDirection: 'column',
+          children: [
+            line(dim(`${when}  `), t(r.tier, { weight: 'bold', color: TIER_COLOR[r.tier] }), dim(`  ${reason}`), outcome),
+            line(t('  '), el.Box({ flexDirection: 'row', flexShrink: 1, children: [what] })),
+          ],
+        });
       }),
     ];
   }
@@ -656,7 +688,7 @@ export function renderPane(el: Elements, s: Snapshot, tab: PaneTab, a: Actions):
         rows.push(
           line(
             t(`  ${x.padEnd(8)}`, { weight: 'bold', color: TIER_COLOR[x] }),
-            t(blocks(share), { color: TIER_COLOR[x] }),
+            t(blocks(share, barWidth), { color: TIER_COLOR[x] }),
             t(`  ${pct(share, 100)}`, { tabular: true }),
           ),
         );

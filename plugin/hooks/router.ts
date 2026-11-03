@@ -8,8 +8,9 @@ import { tierDistribution } from '../src/features.ts';
 import { append, markEscalated, markOverride, recordOf, tune } from '../src/journal.ts';
 import type { JournalRecord } from '../src/journal.ts';
 import { decide, escalate, initialState, POLICY } from '../src/policy.ts';
+import { accountIdOf, backendOfAnswer, DEFAULT_LOCAL_URL, keyHelp, normalizeUrl, SAMPLE_PROMPT, SETUP_OPTIONS } from '../src/setup.ts';
 import { requestEffort, routeFor, TIERS, tierOfModel } from '../src/tiers.ts';
-import type { Decision, Features, Mode, PolicyState, Preference, Route, Tier } from '../src/types.ts';
+import type { Backend, Decision, Features, Mode, PolicyState, Preference, Route, Tier } from '../src/types.ts';
 import { bandText, choiceOf, mainMenu, pinMenu, renderBand, renderPane, switchToast, tuneAdvice, usageText } from '../src/view.ts';
 import type { Actions, PaneTab, Snapshot } from '../src/view.ts';
 
@@ -37,6 +38,8 @@ const DETAIL_KEY = 'decision-router:detail';
 // A hosted decision model answers in well under a second; a model on your own machine or network gets longer.
 const HOSTED_TIMEOUT_MS = 2500;
 const LOCAL_TIMEOUT_MS = 8000;
+// Setup waits longer than a turn does: a local server loads its model on the first request.
+const SETUP_TIMEOUT_MS = 20000;
 const FAILURES_TO_PAUSE = 3;
 const PAUSE_MS = 60_000;
 const BASELINE: Tier = 'sonnet';
@@ -81,8 +84,8 @@ export function register(on: any, opts: Options) {
   on('session.start', async ($: any, e: any, next: any) => {
     await $.command.register({
       name: 'router',
-      description: 'Model routing: quick menu, or pane, on, watch, route, off, pin <tier>, log [n], tune, status',
-      argumentHint: '[pane|on|watch|route|off|pin <tier>|log [n]|tune|status]',
+      description: 'Model routing: quick menu, or setup, test, pane, on, watch, route, off, pin <tier>, log [n], tune, status',
+      argumentHint: '[setup|test|pane|on|watch|route|off|pin <tier>|log [n]|tune|status]',
       immediate: true,
     });
     await migrate($);
@@ -204,6 +207,8 @@ export function register(on: any, opts: Options) {
     if (verb === 'log') return { text: logText(journal, Number(arg) || 10) };
     if (verb === 'tune') return { text: tuneText(journal) };
     if (verb === 'status') return { text: statusText() };
+    if (verb === 'test') return { text: await testText($) };
+    if (verb === 'setup') return { text: await setup($) };
     if (verb === 'pane' || verb === 'details') {
       await openPane($);
       return {};
@@ -233,7 +238,7 @@ export function register(on: any, opts: Options) {
   on('ui.render', { component: ['AbovePrompt', 'Pane'] }, async ($: any, e: any, next: any) => {
     if (e.component === 'Pane' && e.requestId !== PANE) return next(e);
     const elements = $.ui.resolve(e);
-    if (e.component === 'Pane') return renderPane(elements, snapshot(), paneTab, actionsOf($));
+    if (e.component === 'Pane') return renderPane(elements, snapshot(), paneTab, actionsOf($), e.props.bodyColumns);
     if (e.surface === 'terminal' || e.props.hasSurvey) return next(e);
     return elements.Box({
       flexDirection: 'column',
@@ -340,6 +345,134 @@ async function warmUp($: any, endpoint: Endpoint) {
       body: JSON.stringify(warmupBody(endpoint)),
     });
   } catch {}
+}
+
+type TestResult = { ok: true; ms: number } | { ok: false; error: string };
+
+// One real request, with every question, to a candidate endpoint: nothing of the router's failure counters or
+// in-flight bookkeeping is touched, so a test never pauses routing.
+async function runTest($: any, endpoint: Endpoint, key: string | null, timeoutMs: number): Promise<TestResult> {
+  const where = hostOf(endpoint.url);
+  const started = Date.now();
+  try {
+    const call = askSystemOne($, endpoint, key, SAMPLE_PROMPT, []);
+    call.catch(() => {});
+    const response = await Promise.race([call, $.clock.sleep(timeoutMs).then(() => null)]);
+    if (!response) return { ok: false, error: `timed out after ${Math.round(timeoutMs / 1000)} s at ${where}` };
+    parseAnswers(response);
+    return { ok: true, ms: Date.now() - started };
+  } catch (error) {
+    const message = String((error as Error)?.message ?? error);
+    return { ok: false, error: message.includes(where) ? message : `${message} (${where})` };
+  }
+}
+
+// /router test: the configured decision model, tried once.
+async function testText($: any): Promise<string> {
+  const account = options.cloudflare_account_id || (await $.env.get('CLOUDFLARE_ACCOUNT_ID'));
+  const endpoint = endpointOf(account);
+  if ('error' in endpoint) return `The decision model is not set up: ${endpoint.error}. Run /router setup.`;
+  const key = await secretFor($, endpoint);
+  if (endpoint.keyRequired && !key) return keyHelp(backendOf(overrides.backend ?? options.backend));
+  const result = await runTest($, endpoint, key, endpoint.local ? SETUP_TIMEOUT_MS : Math.max(HOSTED_TIMEOUT_MS, 8000));
+  return result.ok
+    ? `${endpoint.label} answered in ${result.ms} ms at ${hostOf(endpoint.url)}.`
+    : `${endpoint.label} did not answer: ${result.error}\nRun /router setup to change the decision model.`;
+}
+
+// /router setup: pick a backend, find or name the server, test it, and save what worked. Keys are never asked for in
+// the dialog: whatever is typed there stays in the scrollback, so they come from the shell or Configure options.
+async function setup($: any): Promise<string> {
+  if (!(await $.session.surfaces()).length)
+    return 'Setup asks questions, so it needs an interactive session. Settings are under /plugin > decision-router > Configure options.';
+  let picked: string;
+  try {
+    picked = await $.ui.ask('Which decision model should the router use?', { options: SETUP_OPTIONS.map((o) => o.label), header: 'Setup' });
+  } catch {
+    return 'Setup cancelled.';
+  }
+  const backend = backendOfAnswer(picked);
+  if (!backend) return 'Setup cancelled: that was not one of the options.';
+  try {
+    const saved = backend === 'llamacpp' || backend === 'local' ? await setupLocal($, backend) : await setupHosted($, backend);
+    const shell = overrides.backend && overrides.backend !== backend ? ' ROUTER_BACKEND is set in your shell and overrides this until you unset it.' : '';
+    return `${saved}${shell}`;
+  } catch {
+    return 'Setup cancelled.';
+  }
+}
+
+async function setupLocal($: any, backend: 'llamacpp' | 'local'): Promise<string> {
+  let url = DEFAULT_LOCAL_URL[backend];
+  const probe = (address: string) => {
+    const endpoint = endpointFor({ backend, localUrl: address, decisionModel: options.decision_model });
+    if ('error' in endpoint) return Promise.resolve<TestResult>({ ok: false, error: endpoint.error });
+    $.ui.toast(`Testing ${hostOf(endpoint.url)} ...`);
+    return secretFor($, endpoint).then((key) => runTest($, endpoint, key, SETUP_TIMEOUT_MS));
+  };
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const result = await probe(url);
+    if (result.ok) return `${await save($, { backend, local_url: url })}\nThe decision model answered in ${result.ms} ms at ${hostOf(url)}. ${modeText()} ${nextStep()}`;
+    const hint =
+      backend === 'llamacpp'
+        ? 'Start llama-server with a decision model such as Clef or Laya loaded (see the README).'
+        : 'Turn on Serve requests under Settings > API > Decision API in Unsloth.';
+    const answer = await $.ui.ask(`Nothing usable answered at ${hostOf(url)}: ${result.error}. ${hint} Type the server's address below, or:`, {
+      options: ['Retry', 'Save anyway', 'Cancel setup'],
+      header: 'Setup',
+    });
+    if (answer === 'Cancel setup') return 'Setup cancelled. Nothing was saved.';
+    if (answer === 'Save anyway') return `${await save($, { backend, local_url: url })}\nSaved without a working test. Run /router test once the server is up.`;
+    if (answer === 'Retry') continue;
+    const typed = normalizeUrl(answer);
+    if (typed) url = typed;
+    else $.ui.toast(`"${answer}" is not an address. Try host:port, for example 10.0.0.9:9931.`);
+  }
+  return 'Setup stopped after four tries. Nothing was saved. Check that the server is running, then run /router setup again.';
+}
+
+async function setupHosted($: any, backend: Backend): Promise<string> {
+  const values: Record<string, string> = { backend };
+  if (backend === 'clef-workers') {
+    // An account ID already in settings or the shell is used as it is; only one typed here is saved.
+    let account: string | null = options.cloudflare_account_id || (await $.env.get('CLOUDFLARE_ACCOUNT_ID')) || null;
+    while (!account) {
+      const answer = await $.ui.ask('What is your Cloudflare account ID? Type it below (32 characters, shown on the Workers AI page).', {
+        options: ['Cancel setup', 'Skip for now'],
+        header: 'Setup',
+      });
+      if (answer === 'Cancel setup') return 'Setup cancelled. Nothing was saved.';
+      if (answer === 'Skip for now') break;
+      account = accountIdOf(answer);
+      if (account) values.cloudflare_account_id = account;
+      else $.ui.toast('That is not a Cloudflare account ID: it is 32 letters and digits.');
+    }
+    if (!account) return `${await save($, values)}\nThe account ID is still missing: set CLOUDFLARE_ACCOUNT_ID, or add it under /plugin > decision-router > Configure options.`;
+  }
+  const saved = await save($, values);
+  const endpoint = endpointFor({
+    backend,
+    cloudflareAccountId: values.cloudflare_account_id || options.cloudflare_account_id || (await $.env.get('CLOUDFLARE_ACCOUNT_ID')),
+    decisionModel: options.decision_model,
+  });
+  if ('error' in endpoint) return `${saved}\n${endpoint.error}`;
+  const key = await secretFor($, endpoint);
+  if (!key) return `${saved}\n${keyHelp(backend)}`;
+  const result = await runTest($, endpoint, key, Math.max(HOSTED_TIMEOUT_MS, 8000));
+  return result.ok
+    ? `${saved}\n${endpoint.label} answered in ${result.ms} ms. ${modeText()} ${nextStep()}`
+    : `${saved}\n${endpoint.label} did not answer: ${result.error}\nCheck the key, then run /router test.`;
+}
+
+const nextStep = () => (mode === 'route' ? '' : 'Run /router route when the picks look right.');
+
+// Writes the plugin's own settings the way /config would. A refusal comes back as text.
+async function save($: any, values: Record<string, string>): Promise<string> {
+  for (const [field, value] of Object.entries(values)) {
+    const result = await $.config.set({ key: `decision-router.${field}`, value });
+    if (result?.deny) return `Could not save ${field}: ${result.deny}`;
+  }
+  return `Saved: ${Object.entries(values).map(([k, v]) => `${k} = ${v}`).join(', ')}.`;
 }
 
 async function classify($: any, text: string): Promise<Advice> {
@@ -576,7 +709,7 @@ function readCache(usage: any) {
   if (total > 0) cacheHit = read / total;
 }
 
-const HELP = 'Commands: /router (quick menu) | pane | on | watch | route | off | pin <tier> | log [n] | tune | status';
+const HELP = 'Commands: /router (quick menu) | setup | test | pane | on | watch | route | off | pin <tier> | log [n] | tune | status';
 
 function modeText(): string {
   return `Routing is ${mode === 'route' ? 'on' : mode === 'watch' ? 'in watch mode (picks shown, nothing changed)' : 'off'}.`;
@@ -588,7 +721,7 @@ function statusText(): string {
   return [
     `${bandText(s)}${usage ? ` · ${usage}` : ''}`,
     `Mode: ${mode}${paused ? ' (paused for this session)' : ''}. Decision model: ${s.label} (${backendOf(overrides.backend ?? options.backend)}). Preference: ${s.preference}. Fable: ${s.fable ? 'allowed' : 'off'}.`,
-    lastError ? `Last decision model error: ${lastError}` : '',
+    lastError ? `Last decision model error: ${lastError}\nRun /router setup to change the decision model, or /router test to try it.` : '',
     HELP,
   ]
     .filter(Boolean)

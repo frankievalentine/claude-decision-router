@@ -38,6 +38,7 @@ function stubs(on: any, setup: Setup) {
     clock: null as any,
     answers: [] as string[],
     asked: [] as { question: string; options: string[] }[],
+    config: [] as { key: string; value: unknown }[],
   }
   const clock = mock.clock(on)
   mock.env(on, setup.env ?? { CLOUDFLARE_ACCOUNT_ID: 'acct', CLOUDFLARE_API_TOKEN: 'token' })
@@ -46,6 +47,10 @@ function stubs(on: any, setup: Setup) {
   on('store.set', ($: any, e: any) => {
     seen.store.set(e.key, e.value)
     return { value: undefined }
+  })
+  on('config.set', ($: any, e: any) => {
+    seen.config.push({ key: e.key, value: e.value })
+    return { value: e.value }
   })
   on('command.register', () => ({ value: undefined }))
   on('session.start', () => ({ cwd: '/work' }))
@@ -73,7 +78,8 @@ function stubs(on: any, setup: Setup) {
   })
   on('http.fetch', ($: any, e: any) => {
     seen.bodies.push({ url: e.url, init: e.init, body: JSON.parse(e.init.body) })
-    if (setup.fetch) return setup.fetch(e)
+    const custom = setup.fetch?.(e)
+    if (custom !== undefined) return custom
     return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify(answers(setup.level ?? 2)) } }
   })
   on('turn.step', async function* ($: any, e: any) {
@@ -437,7 +443,150 @@ test('the spinner says Choosing model while the decision model answers', async (
   expect(await after.find({ type: 'Text', text: 'Choosing model' })).toBeUndefined()
 })
 
+// --- Setup ---
+
+const LLAMA = 'llama.cpp (a server on your machine)'
+const CLOUDFLARE = 'Cloudflare Clef (hosted)'
+const DOWN = { value: { status: 503, ok: false, headers: {}, text: 'down' } }
+const run = ($: any, args: string) => $.command.run({ command: 'router', args })
+
+test('/router setup finds a llama.cpp server on its default port and saves it', async ($, on) => {
+  const seen = stubs(on, { mode: 'watch' })
+  seen.answers.push(LLAMA)
+  await start($)
+  const result = await run($, 'setup')
+  expect(seen.asked[0].options).toEqual([LLAMA, 'Unsloth (a server on your machine)', CLOUDFLARE, 'TypeSafe Jev (hosted)'])
+  expect(seen.bodies[0].url).toBe('http://127.0.0.1:9931/v1/systemone')
+  expect(seen.config).toEqual([
+    { key: 'decision-router.backend', value: 'llamacpp' },
+    { key: 'decision-router.local_url', value: 'http://127.0.0.1:9931' },
+  ])
+  expect(result.text).toMatch(/answered in \d+ ms at 127\.0\.0\.1:9931/)
+  expect(result.text).toContain('/router route')
+})
+
+test('/router setup takes a typed address when the default does not answer', async ($, on) => {
+  const seen = stubs(on, { mode: 'watch', fetch: (e: any) => (e.url.includes('10.0.0.9') ? undefined : DOWN) })
+  seen.answers.push(LLAMA, '10.0.0.9:9931')
+  await start($)
+  const result = await run($, 'setup')
+  expect(seen.asked[1].question).toContain('Nothing usable answered at 127.0.0.1:9931')
+  expect(seen.asked[1].options).toEqual(['Retry', 'Save anyway', 'Cancel setup'])
+  expect(seen.config).toContainEqual({ key: 'decision-router.local_url', value: 'http://10.0.0.9:9931' })
+  expect(result.text).toContain('10.0.0.9:9931')
+})
+
+test('/router setup can be cancelled, or save an address that does not answer yet', async ($, on) => {
+  const seen = stubs(on, { mode: 'watch', fetch: () => DOWN })
+  seen.answers.push(LLAMA, 'Cancel setup')
+  await start($)
+  expect((await run($, 'setup')).text).toBe('Setup cancelled. Nothing was saved.')
+  expect(seen.config).toEqual([])
+  seen.answers.push(LLAMA, 'Save anyway')
+  const saved = await run($, 'setup')
+  expect(seen.config.map((c) => c.key)).toEqual(['decision-router.backend', 'decision-router.local_url'])
+  expect(saved.text).toContain('Saved without a working test')
+})
+
+test('/router setup for Cloudflare asks for the account ID but never for the key', async ($, on) => {
+  const seen = stubs(on, { mode: 'watch', env: {} })
+  seen.answers.push(CLOUDFLARE, 'A'.repeat(32))
+  await start($)
+  const result = await run($, 'setup')
+  expect(seen.config).toEqual([
+    { key: 'decision-router.backend', value: 'clef-workers' },
+    { key: 'decision-router.cloudflare_account_id', value: 'a'.repeat(32) },
+  ])
+  expect(result.text).toContain('No Cloudflare API token found. Set CLOUDFLARE_API_TOKEN in your shell')
+  // Nothing was sent, and no question asked for a token.
+  expect(seen.bodies.length).toBe(0)
+  expect(seen.asked.every((q) => !/token|key/i.test(q.question))).toBe(true)
+})
+
+test('/router setup for Cloudflare tests the connection when the shell already has the key', async ($, on) => {
+  const seen = stubs(on, { mode: 'watch' })
+  seen.answers.push(CLOUDFLARE)
+  await start($)
+  const result = await run($, 'setup')
+  expect(seen.config).toEqual([{ key: 'decision-router.backend', value: 'clef-workers' }])
+  expect(seen.bodies[0].url).toContain('/accounts/acct/ai/run/@cf/cloudflare/clef-flash')
+  expect(result.text).toMatch(/Clef Flash answered in \d+ ms/)
+})
+
+test('dismissing /router setup saves nothing', async ($, on) => {
+  const seen = stubs(on, { mode: 'watch' })
+  await start($)
+  expect((await run($, 'setup')).text).toBe('Setup cancelled.')
+  expect(seen.config).toEqual([])
+})
+
+test('/router test reports the decision model answering, or why it did not', async ($, on) => {
+  let healthy = true
+  const seen = stubs(on, { mode: 'watch', fetch: () => (healthy ? undefined : DOWN) })
+  await start($)
+  expect((await run($, 'test')).text).toMatch(/^Clef Flash answered in \d+ ms at api\.cloudflare\.com\.$/)
+  healthy = false
+  const bad = await run($, 'test')
+  expect(bad.text).toContain('Clef Flash did not answer: HTTP 503 from api.cloudflare.com: down')
+  expect(bad.text).toContain('/router setup')
+  // A test never pauses routing, however often it fails.
+  for (let i = 0; i < 4; i += 1) await run($, 'test')
+  expect(seen.logs.join('\n')).not.toContain('paused for a minute')
+})
+
+test('/router test names a missing key and where to put it', async ($, on) => {
+  stubs(on, { mode: 'watch', env: { CLOUDFLARE_ACCOUNT_ID: 'acct' } })
+  await start($)
+  expect((await run($, 'test')).text).toContain('No Cloudflare API token found')
+})
+
 // --- The pane ---
+
+test('a narrow pane stacks labels above values, wraps its rows and shortens its bars', async ($, on) => {
+  stubs(on, { mode: 'route', level: 3 })
+  await start($)
+  await turn($, 't1', 'track down the memory leak')
+  const wide = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 100 } })
+  // Wide: the label sits beside its value in an 11-cell column.
+  expect((await wide.find({ type: 'Text', text: 'Next turn' }))?.text).toBe('Next turn'.padEnd(11))
+  const barOf = async (ui: any) => (await ui.findAll({ type: 'Text', text: /^[█░]+$/ })).map((b: any) => b.text.length)
+  expect(Math.max(...(await barOf(wide)))).toBe(16)
+  await wide.unmount()
+  // Narrow: the label stands alone on its own line, every row may wrap, and the bars shorten to fit.
+  const narrow = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 44 } })
+  expect((await narrow.find({ type: 'Text', text: 'Next turn' }))?.text).toBe('Next turn')
+  const wrapping = (await narrow.findAll({ type: 'Box' })).filter((b: any) => b.props.flexWrap === 'wrap')
+  expect(wrapping.length).toBeGreaterThanOrEqual(4)
+  expect(Math.max(...(await barOf(narrow)))).toBe(14)
+})
+
+test('the status stands on its own line, so a long fault wraps instead of pushing the buttons out', async ($, on) => {
+  const long = 'timed out after 8 s at 10.0.0.9:8888'
+  stubs(on, { mode: 'route', fetch: () => ({ value: { status: 503, ok: false, headers: {}, text: long } }) })
+  await start($)
+  await turn($, 't1', 'refactor the parser')
+  const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 40 } })
+  const status = await ui.find({ type: 'Text', text: 'HTTP 503' })
+  expect(status).toBeDefined()
+  expect(status?.text).toContain(long)
+  expect(await ui.find({ key: 'mode-route' })).toBeDefined()
+})
+
+test('the Log tab gives each entry one line in a wide pane and two in a narrow one', async ($, on) => {
+  stubs(on, { mode: 'route', level: 3 })
+  await start($)
+  await turn($, 't1', 'track down the memory leak')
+  const tierText = async (columns: number) => {
+    const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: columns } })
+    await ui.press({ key: 'tab-log' })
+    const first = (await ui.findAll({ type: 'Text', text: /^(haiku|sonnet|opus|fable)/ }))[0]
+    await ui.unmount()
+    return first?.text
+  }
+  // Wide: the tier is padded to a column that the reason and detail follow on the same line. Narrow: it stands alone.
+  expect(await tierText(100)).toBe('opus   ')
+  expect(await tierText(60)).toBe('opus')
+})
 
 test('the pane shows the next turn, why, pins with odds, session, plan and context', async ($, on) => {
   const seen = stubs(on, { mode: 'route', level: 3 })

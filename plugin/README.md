@@ -20,7 +20,7 @@ Decision models are good at describing tasks and poor at choosing models directl
 
 ## What you see
 
-![The band under the permission mode, and the quick menu](docs/band.png)
+![The band under the permission mode](docs/band.png)
 
 - **The band**, on the line under the prompt, below the permission mode (`auto mode on`). In the desktop app, which has no such line, it sits above the prompt instead. Its design is claude-router's: signal bars lit up to the tier, the tier pill, the activity in orange, the model and effort, the reason (`↑ jump`, `↓ downgrade`, `= fits`, `… waiting to go up`), the decision model's evidence against the bar (`Laya 91% ≥ 82%`), your 5-hour and weekly plan usage, context fill and cache hit. Parts drop from the right as the terminal narrows; the tier and model never do.
 - **The quick menu**: `/router`, or **Router** at the end of the band. A numbered question in Claude Code's own dialog, answered from the keyboard: switch between route and watch, pin the next turn (a second step asks which model), turn routing off or on, or open the details. Esc closes it without changing anything.
@@ -46,9 +46,10 @@ Decision models are good at describing tasks and poor at choosing models directl
 The repository holds a one-plugin marketplace, so Claude Code prompts for your keys on install and stores the secret ones in your system's secure credential store.
 
 1. Add the marketplace in Claude Code, from a clone (`git clone https://github.com/frankievalentine/claude-decision-router.git ~/claude-decision-router`, then `/plugin marketplace add ~/claude-decision-router`) or straight from GitHub (`/plugin marketplace add frankievalentine/claude-decision-router`; the repository is private, so this needs access to it and GitHub credentials set up for git).
-2. Then: `/plugin install decision-router@decision-router-local`, and fill in the backend and its key when asked.
-3. Use **watch** mode for a few days: the band shows what the router would pick and why, and nothing changes.
-4. When the picks look right: `/router route`.
+2. Then: `/plugin install decision-router@decision-router-local`.
+3. Run `/router setup`: pick a decision model, and it finds your server (or asks for its address), tests it and saves the settings. It never asks for a key: keys come from `CLOUDFLARE_API_TOKEN`, `TYPESAFE_API_KEY` or `ROUTER_LOCAL_API_KEY` in your shell, or from Configure options (see Settings and keys).
+4. Use **watch** mode for a few days: the band shows what the router would pick and why, and nothing changes.
+5. When the picks look right: `/router route`.
 
 A clone is read in place: after `git pull`, `/reload-plugins` picks up the change. A GitHub install runs its own copy: `claude plugin marketplace update decision-router-local`, then `claude plugin update decision-router@decision-router-local`.
 
@@ -57,6 +58,8 @@ Requires Claude Code 2.1.299 or later (per-request model changes, and the `weigh
 To work on the code instead, load the folder directly: `claude --plugin-dir ~/claude-decision-router/plugin`. Claude Code then hot-reloads your edits and writes the mods API types into `.claude-plugin/types/` for your editor. With `--plugin-dir`, set keys as `CLOUDFLARE_API_TOKEN` or `TYPESAFE_API_KEY` in your shell.
 
 ## Backends
+
+`/router setup` configures any of these for you; `/router test` sends one request to the configured one and reports the answer or the exact fault. The details below are for doing it by hand.
 
 | Backend | Calls | Needs |
 |---|---|---|
@@ -120,6 +123,8 @@ Set `backend` to `local`, `local_url` to `http://127.0.0.1:30000/v1/systemone`, 
 
 - `/router`: the quick menu (or the status as text where no one can answer it). Unknown words print the list of commands
 - `/router pane`: the pane with Now, Log and Tune
+- `/router setup`: choose a backend, find or name its server, test it and save the settings. Keys are never asked for in the dialog, since what you type there stays in the scrollback
+- `/router test`: send one request to the configured decision model and report the answer or the fault
 - `/router status`: the status as text, with the last decision-model error
 - `/router route | watch | off | on`: change the mode (remembered across sessions)
 - `/router pin haiku | sonnet | opus | fable`: run the next turn on that tier
@@ -139,8 +144,10 @@ src/policy.ts        When to switch; plan-usage gate; escalation
 src/classifier.ts    Backends and the System One wire format
 src/journal.ts       Decision log and tuning
 src/tiers.ts         Models, efforts, availability fallback
+src/setup.ts         What /router setup offers and how it reads addresses
 src/view.ts          The band and the pane (claude-router's design)
 tests/               claude plugin test: unit tests and end-to-end tests of the hooks module
+scripts/             render-docs.sh: the README screenshots, drawn by the same code as the plugin, with an overflow check
 ```
 
 Run the tests with `claude plugin test` and check the module with `claude plugin validate .`.

@@ -1,76 +1,71 @@
 # claude-decision-router
 
-A Claude Code mod that picks the Claude model for each turn, so you get the most out of your subscription without choosing models by hand. Inside Claude Code it is the plugin `decision-router`, and its command is `/router`.
+A Claude Code plugin that picks the Claude model for each turn, so your subscription goes further without you choosing models by hand.
 
-A decision model (Cloudflare's Clef, TypeSafe's Jev, or a Clef or Laya model on your own server) describes each task: what kind of work it is, how difficult, how much reasoning it needs, whether it's security-sensitive. A switching policy then turns that into Haiku, Sonnet, Opus or Fable, weighing the prompt cache and your plan's 5-hour and weekly limits. The decision model never names a model itself.
+A small decision model reads each prompt and describes it: how hard, how much code, whether it touches security. A policy that knows your plan's 5-hour and weekly limits turns that into Haiku, Sonnet, Opus or Fable. Run the decision model on your own machine with llama.cpp or Unsloth, or use a hosted one.
 
-![The band under the permission mode, and the quick menu](plugin/docs/band.png)
+![The band under the permission mode](plugin/docs/band.png)
 
 ## Install
 
-Requires Claude Code 2.1.299 or later.
-
-**From a local clone:**
-
-```
-git clone https://github.com/frankievalentine/claude-decision-router.git ~/claude-decision-router
-```
-
-Then in Claude Code:
-
-```
-/plugin marketplace add ~/claude-decision-router
-/plugin install decision-router@decision-router-local
-```
-
-**From GitHub** (the repository is private: you need access to it, and GitHub credentials set up for git on your machine):
+In Claude Code (the repository is private, so you need access to it and GitHub set up for git):
 
 ```
 /plugin marketplace add frankievalentine/claude-decision-router
 /plugin install decision-router@decision-router-local
 ```
 
-Claude Code asks for the backend and its key during install and keeps the secret ones in your system's secure credential store. See [Backends](plugin/README.md#backends) for what each one needs.
+Requires Claude Code 2.1.299 or later.
 
-## Quick start
+## Set up
 
-1. Leave the router in **watch** mode for a few days: the band shows what it would pick and why, and nothing changes.
-2. Type `/router` for the quick menu, or `/router pane` for the Now, Log and Tune tabs.
-3. When the picks look right, switch to routing with `/router route`.
+Run `/router setup`. It asks which decision model to use, finds your server (or asks for its address), sends one test request and saves the settings. It never asks for an API key.
+
+| You have | Choose | You need |
+|---|---|---|
+| llama.cpp | llama.cpp | `llama-server` running a decision model (below) |
+| Unsloth | Unsloth | Settings > API > Decision API > Serve requests turned on |
+| A Cloudflare account | Cloudflare Clef | Your account ID, and `CLOUDFLARE_API_TOKEN` in your shell |
+| A TypeSafe account | TypeSafe Jev | `TYPESAFE_API_KEY` in your shell |
+
+**llama.cpp, in one command.** Download the Q8_0 build of Clef Flash (about 9.5 GB, fits a 16 GB GPU), then:
+
+```
+llama-server -m Clef-Flash-Q8_0.gguf --port 9931 -ngl all -c 4096 -b 4096 -ub 4096 -np 1
+```
+
+Run `/router setup`, choose **llama.cpp**, and it finds the server on port 9931. For a server on another machine, type its address when asked, for example `10.0.0.9:9931`. What each flag does is in [plugin/README.md](plugin/README.md#clef-or-laya-with-llamacpp).
+
+`/router test` tries the configured decision model again at any time and says what is wrong if it does not answer.
+
+## Use
+
+The router starts in **watch** mode: the band under the prompt shows what it would pick and why, and nothing changes. After a few days, when the picks look right:
+
+```
+/router route
+```
+
+| Command | What it does |
+|---|---|
+| `/router` | Quick menu: switch route and watch, pin the next turn, turn off, details |
+| `/router setup` | Choose and test a decision model |
+| `/router test` | Try the configured decision model once |
+| `/router pane` | Details: the current pick, plan usage, the decision log and tuning |
+| `/router route`, `watch`, `off` | Change the mode |
+| `/router pin opus` | Run the next turn on that model |
+
+![The details pane](plugin/docs/pane.png)
 
 ## Updating
 
-- **Local clone:** `git pull`, then `/reload-plugins`. Claude Code reads the plugin from the folder itself.
-- **From GitHub:** `claude plugin marketplace update decision-router-local`, then `claude plugin update decision-router@decision-router-local`, then `/reload-plugins` or a restart.
+Run `claude plugin marketplace update decision-router-local`, then `claude plugin update decision-router@decision-router-local`, then restart Claude Code.
 
-## Repository layout
+## More
 
-```
-.claude-plugin/marketplace.json   A one-plugin marketplace, decision-router-local, pointing at plugin/
-plugin/                           The plugin: manifest, hooks module, source, tests and its full documentation
-```
+[plugin/README.md](plugin/README.md) covers how a turn runs, the switching policy, every backend in detail (including SGLang), settings and keys, and the source layout.
 
-## Development
-
-Run Claude Code with the plugin loaded straight from the folder, which hot-reloads your edits:
-
-```
-claude --plugin-dir ./plugin
-```
-
-Run the tests and validate the plugin:
-
-```
-cd plugin
-claude plugin test
-claude plugin validate .
-```
-
-The version lives in `plugin/.claude-plugin/plugin.json`. Bump it with each change you push, because `claude plugin update` compares versions.
-
-## Documentation
-
-[plugin/README.md](plugin/README.md) covers the rest: how a turn runs, what the band and pane show, the switching policy, every backend (including llama.cpp, Unsloth and SGLang setups), settings and keys, all `/router` commands, calibration and the source layout.
+To work on the plugin: clone the repository and run `claude --plugin-dir ./plugin`, which hot-reloads your edits. In `plugin/`, `claude plugin test` runs the tests, `claude plugin validate .` checks the plugin, and `scripts/render-docs.sh` regenerates the screenshots above and checks that nothing in the band or pane draws past its edge. Bump the version in `plugin/.claude-plugin/plugin.json` with each change you push, because `claude plugin update` compares versions.
 
 ## License and credits
 
