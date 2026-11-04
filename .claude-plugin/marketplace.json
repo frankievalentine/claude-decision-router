@@ -1,7 +1,7 @@
 {
   "name": "decision-router-local",
   "owner": { "name": "claude-decision-router contributors" },
-  "description": "Private marketplace for claude-decision-router, a per-turn Claude model router",
+  "description": "Marketplace for claude-decision-router, a per-turn Claude model router",
   "plugins": [
     {
       "name": "decision-router",

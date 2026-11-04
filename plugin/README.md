@@ -41,11 +41,11 @@ Decision models are good at describing tasks and poor at choosing models directl
 - **Security-sensitive work** runs on Sonnet or above.
 - **Fails open.** A missing key, a dead server, a timeout or a low-confidence answer leaves your current model alone. Three failures in a row pause the decision model for a minute.
 
-## Install (private)
+## Install
 
 The repository holds a one-plugin marketplace, so Claude Code prompts for your keys on install and stores the secret ones in your system's secure credential store.
 
-1. Add the marketplace in Claude Code, from a clone (`git clone https://github.com/frankievalentine/claude-decision-router.git ~/claude-decision-router`, then `/plugin marketplace add ~/claude-decision-router`) or straight from GitHub (`/plugin marketplace add frankievalentine/claude-decision-router`; the repository is private, so this needs access to it and GitHub credentials set up for git).
+1. Add the marketplace in Claude Code, from a clone (`git clone https://github.com/frankievalentine/claude-decision-router.git ~/claude-decision-router`, then `/plugin marketplace add ~/claude-decision-router`) or straight from GitHub (`/plugin marketplace add frankievalentine/claude-decision-router`).
 2. Then: `/plugin install decision-router@decision-router-local`.
 3. Run `/router setup`: pick a decision model, and it finds your server (or asks for its address), tests it and saves the settings. It never asks for a key: keys come from `CLOUDFLARE_API_TOKEN`, `TYPESAFE_API_KEY` or `ROUTER_LOCAL_API_KEY` in your shell, or from Configure options (see Settings and keys).
 4. Use **watch** mode for a few days: the band shows what the router would pick and why, and nothing changes.

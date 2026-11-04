@@ -8,7 +8,7 @@ A small decision model reads each prompt and describes it: how hard, how much co
 
 ## Install
 
-In Claude Code (the repository is private, so you need access to it and GitHub set up for git):
+In Claude Code:
 
 ```
 /plugin marketplace add frankievalentine/claude-decision-router
