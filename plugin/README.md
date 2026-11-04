@@ -2,7 +2,7 @@
 
 Inside Claude Code the plugin is named `decision-router` and its command is `/router`: Claude Code reserves plugin names that start with `claude-` for Anthropic's own. It was called `router-enhanced` before 0.6; your saved mode and decision log carry over.
 
-A Claude Code mod that picks the Claude model for each turn, so you get the most out of your subscription without choosing models by hand.
+A Claude Code plugin that picks the Claude model for each turn, so you get the most out of your subscription without choosing models by hand.
 
 A decision model (Cloudflare's Clef or TypeSafe's Jev) **describes** each task: what kind of work it is, how difficult, how much reasoning it needs, how much code it touches, whether it's security-sensitive, and whether it continues the task already running. The router then **decides**: it turns those answers into a probability for each tier and applies a switching policy that knows about your plan's 5-hour and weekly limits.
 
