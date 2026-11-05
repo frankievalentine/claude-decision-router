@@ -9,6 +9,8 @@ import { append, markEscalated, markOverride, recordOf, tune } from '../src/jour
 import type { JournalRecord } from '../src/journal.ts';
 import { decide, escalate, initialState, POLICY } from '../src/policy.ts';
 import { accountIdOf, backendOfAnswer, DEFAULT_LOCAL_URL, keyHelp, normalizeUrl, SAMPLE_PROMPT, SETUP_OPTIONS } from '../src/setup.ts';
+import { addUsage, appendSpawn, isCheaper, kindOf, pickFor, recordOfSpawn, summarize, updateSpawn } from '../src/spawn.ts';
+import type { SpawnMode, SpawnRecord } from '../src/spawn.ts';
 import { requestEffort, routeFor, TIERS, tierOfModel } from '../src/tiers.ts';
 import type { Backend, Decision, Features, Mode, PolicyState, Preference, Route, Tier } from '../src/types.ts';
 import { bandText, choiceOf, mainMenu, pinMenu, renderBand, renderPane, switchToast, tuneAdvice, usageText } from '../src/view.ts';
@@ -35,6 +37,8 @@ const PANE = 'decision-router';
 const MODE_KEY = 'decision-router:mode';
 const JOURNAL_KEY = 'decision-router:journal';
 const DETAIL_KEY = 'decision-router:detail';
+const SPAWN_MODE_KEY = 'decision-router:subagent-mode';
+const SPAWN_LOG_KEY = 'decision-router:subagent-log';
 // A hosted decision model answers in well under a second; a model on your own machine or network gets longer.
 const HOSTED_TIMEOUT_MS = 2500;
 const LOCAL_TIMEOUT_MS = 8000;
@@ -43,6 +47,9 @@ const SETUP_TIMEOUT_MS = 20000;
 const FAILURES_TO_PAUSE = 3;
 const PAUSE_MS = 60_000;
 const BASELINE: Tier = 'sonnet';
+// Subagents waiting for the decision model. A larger burst goes unasked rather than building a long line.
+const MAX_SPAWN_QUEUE = 8;
+const SPAWN_WAIT_STEP_MS = 100;
 
 const pick = <T extends string>(value: unknown, allowed: readonly T[], fallback: T): T =>
   allowed.includes(value as T) ? (value as T) : fallback;
@@ -77,6 +84,16 @@ let inFlight = false;
 // start: handy with --plugin-dir, where no settings are saved.
 let overrides: { backend?: string; localUrl?: string; decisionModel?: string } = {};
 const jobs = new Map<string, Promise<Advice>>();
+// Subagent watching keeps to itself: its own log, its own line and its own failure count, so it cannot take a main
+// turn's request, push out the main log or pause main routing.
+let spawnMode: SpawnMode = 'off';
+let spawnLog: SpawnRecord[] = [];
+let spawnQueue: { id: string; prompt: string; actual: Tier | null }[] = [];
+let spawnDraining = false;
+// The last subagent request sent: it may outlive its timeout, and no new one goes out until it settles.
+let spawnCall: Promise<unknown> | null = null;
+let spawnFailures = 0;
+let spawnPausedUntil = 0;
 
 export function register(on: any, opts: Options) {
   options = opts ?? {};
@@ -84,8 +101,8 @@ export function register(on: any, opts: Options) {
   on('session.start', async ($: any, e: any, next: any) => {
     await $.command.register({
       name: 'router',
-      description: 'Model routing: quick menu, or setup, test, pane, on, watch, route, off, pin <tier>, log [n], tune, status',
-      argumentHint: '[setup|test|pane|on|watch|route|off|pin <tier>|log [n]|tune|status]',
+      description: 'Model routing: quick menu, or setup, test, pane, on, watch, route, off, pin <tier>, log [n], tune, status, subagents [watch|off]',
+      argumentHint: '[setup|test|pane|on|watch|route|off|pin <tier>|log [n]|tune|status|subagents [watch|off]]',
       immediate: true,
     });
     await migrate($);
@@ -93,6 +110,12 @@ export function register(on: any, opts: Options) {
     detail = (await $.store.get(DETAIL_KEY)) === true;
     const saved = await $.store.get(JOURNAL_KEY);
     journal = Array.isArray(saved) ? saved : [];
+    spawnMode = pick(await $.store.get(SPAWN_MODE_KEY), ['watch', 'off'] as const, 'off');
+    const savedSpawns = await $.store.get(SPAWN_LOG_KEY);
+    spawnLog = Array.isArray(savedSpawns) ? savedSpawns : [];
+    spawnQueue = [];
+    spawnFailures = 0;
+    spawnPausedUntil = 0;
     nativeModel = await $.session.model();
     paused = false;
     choosing = false;
@@ -116,6 +139,8 @@ export function register(on: any, opts: Options) {
   // Start asking the decision model as soon as the turn exists, so the answer is usually ready by its first request.
   // A pinned turn and a turn without typed text (a continuation) ask nothing.
   on('turn.start', async ($: any, e: any, next: any) => {
+    // A subagent's run starts a turn of its own. Routing is the main conversation's, and its prompt stays here.
+    if (e.agentId) return next(e);
     toolErrors = 0;
     if (mode !== 'off' && !paused && !pin && e.text.trim()) {
       jobs.set(e.turnId, classify($, e.text));
@@ -126,7 +151,12 @@ export function register(on: any, opts: Options) {
   });
 
   on('turn.step', async function* ($: any, e: any, next: any) {
-    if (e.agentId || mode === 'off' || paused) return yield* next(e);
+    if (e.agentId) {
+      const result = yield* next(e);
+      if (result?.usage) spawnLog = updateSpawn(spawnLog, e.agentId, (r) => addUsage(r, result.usage));
+      return result;
+    }
+    if (mode === 'off' || paused) return yield* next(e);
     if (e.index === 0) {
       const before = current?.route ?? null;
       const job = jobs.get(e.turnId);
@@ -163,6 +193,21 @@ export function register(on: any, opts: Options) {
   on('tool.call', async ($: any, e: any, next: any) => {
     const result = await next(e);
     if (!e.agentId && result?.isError) toolErrors += 1;
+    if (e.agentId && result?.isError) spawnLog = updateSpawn(spawnLog, e.agentId, (r) => ({ toolErrors: r.toolErrors + 1 }));
+    return result;
+  });
+
+  // Watching only: the subagent starts exactly as asked, and what the router would have picked is worked out afterward.
+  on('agent.spawn', async ($: any, e: any, next: any) => {
+    const result = await next(e);
+    if (spawnMode === 'watch' && mode !== 'off' && !paused && !result?.deny) await noteSpawn($, e, result);
+    return result;
+  });
+
+  // A subagent's usage and tool errors build up in memory and are saved when it finishes.
+  on('turn.complete', async ($: any, e: any, next: any) => {
+    const result = await next(e);
+    if (e.agentId && spawnLog.some((r) => r.id === e.agentId)) await saveSpawns($);
     return result;
   });
 
@@ -207,6 +252,11 @@ export function register(on: any, opts: Options) {
     if (verb === 'log') return { text: logText(journal, Number(arg) || 10) };
     if (verb === 'tune') return { text: tuneText(journal) };
     if (verb === 'status') return { text: statusText() };
+    if (verb === 'subagents') {
+      if (arg === 'watch' || arg === 'off') return { text: await setSpawnMode($, arg) };
+      if (arg) return { text: 'Usage: /router subagents [watch | off]' };
+      return { text: spawnText(spawnLog) };
+    }
     if (verb === 'test') return { text: await testText($) };
     if (verb === 'setup') return { text: await setup($) };
     if (verb === 'pane' || verb === 'details') {
@@ -308,6 +358,18 @@ async function setMode($: any, m: Mode) {
   mode = m;
   await $.store.set(MODE_KEY, mode);
   $.ui.invalidate('ui.render');
+}
+
+async function setSpawnMode($: any, m: SpawnMode): Promise<string> {
+  spawnMode = m;
+  await $.store.set(SPAWN_MODE_KEY, m);
+  if (m === 'off') {
+    spawnLog = spawnQueue.reduce((log, job) => updateSpawn(log, job.id, () => ({ reason: 'no-advice', error: 'watching was turned off' })), spawnLog);
+    spawnQueue = [];
+    await saveSpawns($);
+    return 'Subagent watching is off.';
+  }
+  return `Watching subagents: each one still runs on its usual model. The task text of general subagents now also goes to ${labelOf()}. /router subagents shows what the router would have picked.`;
 }
 
 async function pinNext($: any, tier: Tier | null) {
@@ -475,14 +537,22 @@ async function save($: any, values: Record<string, string>): Promise<string> {
   return `Saved: ${Object.entries(values).map(([k, v]) => `${k} = ${v}`).join(', ')}.`;
 }
 
+// The configured endpoint and its key, or why they are not usable.
+async function connectionOf($: any): Promise<{ endpoint: Endpoint; key: string | null } | { error: string }> {
+  const account = options.cloudflare_account_id || (await $.env.get('CLOUDFLARE_ACCOUNT_ID'));
+  const endpoint = endpointOf(account);
+  if ('error' in endpoint) return { error: endpoint.error };
+  const key = await secretFor($, endpoint);
+  if (endpoint.keyRequired && !key) return { error: `missing ${endpoint.key}` };
+  return { endpoint, key };
+}
+
 async function classify($: any, text: string): Promise<Advice> {
   if (Date.now() < pausedUntil) return { features: null, error: 'paused for a minute after 3 failures', latencyMs: null };
   if (inFlight) return { features: null, error: 'the previous request is still running', latencyMs: null };
-  const account = options.cloudflare_account_id || (await $.env.get('CLOUDFLARE_ACCOUNT_ID'));
-  const endpoint = endpointOf(account);
-  if ('error' in endpoint) return { features: null, error: endpoint.error, latencyMs: null };
-  const key = await secretFor($, endpoint);
-  if (endpoint.keyRequired && !key) return { features: null, error: `missing ${endpoint.key}`, latencyMs: null };
+  const connection = await connectionOf($);
+  if ('error' in connection) return { features: null, error: connection.error, latencyMs: null };
+  const { endpoint, key } = connection;
   const timeoutMs = timeoutOf(endpoint);
   const where = hostOf(endpoint.url);
   const started = Date.now();
@@ -511,6 +581,89 @@ async function classify($: any, text: string): Promise<Advice> {
     // Network errors from the engine rarely name the host; add it once.
     return { features: null, error: message.includes(where) ? message : `${message} (${where})`, latencyMs: Date.now() - started };
   }
+}
+
+// Records a subagent that just started and, for a general one, puts its task in line for the decision model. A fault
+// here is logged and goes no further: the subagent is already running.
+async function noteSpawn($: any, e: any, result: any) {
+  try {
+    const id = String(result?.agentId ?? e.tool_use_id);
+    const record = recordOfSpawn(id, Date.now(), kindOf(e), tierOfModel(result?.model));
+    spawnLog = appendSpawn(spawnLog, record);
+    if (record.reason === 'pending') {
+      if (spawnQueue.length < MAX_SPAWN_QUEUE) {
+        spawnQueue.push({ id, prompt: e.prompt, actual: record.actual });
+        drainSpawns($);
+      } else {
+        spawnLog = updateSpawn(spawnLog, id, () => ({ reason: 'no-advice', error: 'too many subagents at once' }));
+      }
+    }
+    await saveSpawns($);
+  } catch (error) {
+    $.ui.log(`subagent watch: ${String((error as Error)?.message ?? error)}`, { to: 'debug' });
+  }
+}
+
+// Asks about one waiting subagent at a time, in the background. A request for a main turn goes first: nothing is sent
+// while one is running, and a subagent that waits longer than one timeout goes unasked.
+async function drainSpawns($: any) {
+  if (spawnDraining) return;
+  spawnDraining = true;
+  try {
+    while (spawnQueue.length) {
+      await spawnCall;
+      const connection = await connectionOf($);
+      const limit = 'error' in connection ? 0 : timeoutOf(connection.endpoint);
+      let waited = 0;
+      while (inFlight && waited < limit) {
+        await $.clock.sleep(SPAWN_WAIT_STEP_MS);
+        waited += SPAWN_WAIT_STEP_MS;
+      }
+      const job = spawnQueue.shift();
+      if (!job) break;
+      const advice = await adviceForSpawn($, connection, job.prompt);
+      const preference = pick(options.preference, ['cost', 'balanced', 'quality'] as const, 'balanced') as Preference;
+      const minConfidence = typeof options.min_confidence === 'number' ? options.min_confidence : 0.45;
+      const { pick: tier, reason, confidence } = pickFor(advice.features, job.actual, { preference, minConfidence, usage: { usedPercent } });
+      const top = advice.features ? Object.entries(advice.features.activity).sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0))[0] : undefined;
+      spawnLog = updateSpawn(spawnLog, job.id, () => ({ pick: tier, reason, confidence, activity: top ? top[0] : null, latencyMs: advice.latencyMs, error: advice.error }));
+      await saveSpawns($);
+    }
+  } catch (error) {
+    $.ui.log(`subagent watch: ${String((error as Error)?.message ?? error)}`, { to: 'debug' });
+  } finally {
+    spawnDraining = false;
+  }
+}
+
+// One decision-model request about a subagent's task. Its own prompt says all there is: the main conversation's last
+// messages describe something else.
+async function adviceForSpawn($: any, connection: { endpoint: Endpoint; key: string | null } | { error: string }, prompt: string): Promise<Advice> {
+  if ('error' in connection) return { features: null, error: connection.error, latencyMs: null };
+  if (inFlight) return { features: null, error: 'a main turn was still asking', latencyMs: null };
+  if (Date.now() < pausedUntil || Date.now() < spawnPausedUntil) return { features: null, error: 'paused for a minute after 3 failures', latencyMs: null };
+  const { endpoint, key } = connection;
+  const timeoutMs = timeoutOf(endpoint);
+  const where = hostOf(endpoint.url);
+  const started = Date.now();
+  const call = askSystemOne($, endpoint, key, prompt.slice(0, 6000), []);
+  spawnCall = call.catch(() => {});
+  try {
+    const response = await Promise.race([call, $.clock.sleep(timeoutMs).then(() => null)]);
+    if (!response) throw new Error(`timed out after ${timeoutMs / 1000} s at ${where}`);
+    const features = parseAnswers(response);
+    spawnFailures = 0;
+    return { features, error: null, latencyMs: Date.now() - started };
+  } catch (error) {
+    spawnFailures += 1;
+    if (spawnFailures >= FAILURES_TO_PAUSE) spawnPausedUntil = Date.now() + PAUSE_MS;
+    const message = String((error as Error)?.message ?? error);
+    return { features: null, error: message.includes(where) ? message : `${message} (${where})`, latencyMs: Date.now() - started };
+  }
+}
+
+async function saveSpawns($: any) {
+  await $.store.set(SPAWN_LOG_KEY, spawnLog);
 }
 
 // One System One request with every question. Resolves to the answer body.
@@ -712,7 +865,7 @@ function readCache(usage: any) {
   if (total > 0) cacheHit = read / total;
 }
 
-const HELP = 'Commands: /router (quick menu) | setup | test | pane | on | watch | route | off | pin <tier> | log [n] | tune | status';
+const HELP = 'Commands: /router (quick menu) | setup | test | pane | on | watch | route | off | pin <tier> | log [n] | tune | status | subagents [watch | off]';
 
 function modeText(): string {
   return `Routing is ${mode === 'route' ? 'on' : mode === 'watch' ? 'in watch mode (picks shown, nothing changed)' : 'off'}.`;
@@ -742,6 +895,33 @@ function logText(records: JournalRecord[], n: number): string {
       return `${when}  ${r.mode.padEnd(5)} ${r.tier.padEnd(6)} ${r.reason.padEnd(14)} ${what}${lean}${r.outcome === 'ok' ? '' : `  [${r.outcome}]`}`;
     })
     .join('\n');
+}
+
+function spawnText(records: SpawnRecord[]): string {
+  const state = spawnMode === 'watch' ? 'watching: subagents still run on their usual models' : 'not watching. Turn it on with /router subagents watch';
+  const heading = `Subagents: ${state}.`;
+  if (!records.length) return `${heading}\nNo subagents recorded yet.`;
+  const s = summarize(records);
+  const kinds = Object.entries(s.byKind)
+    .map(([kind, n]) => `${n} ${kind}`)
+    .join(', ');
+  const share = s.totalTokens ? Math.round((s.cheaperTokens / s.totalTokens) * 100) : 0;
+  const recent = records.slice(-10).map((r) => {
+    const when = new Date(r.at).toISOString().slice(5, 16).replace('T', ' ');
+    const move = r.pick ? `${r.actual} → ${r.pick}` : `${r.actual ?? 'unknown'}`;
+    const flag = isCheaper(r) ? '  cheaper' : '';
+    const fault = r.error ? `  error: ${r.error}` : r.toolErrors ? `  ${r.toolErrors} tool errors` : '';
+    return `${when}  ${r.kind.padEnd(8)} ${move.padEnd(16)} ${r.reason.padEnd(14)} ${(r.inputTokens + r.outputTokens).toLocaleString('en-US')} tokens${flag}${fault}`;
+  });
+  return [
+    heading,
+    `Seen: ${s.seen} (${kinds}).`,
+    `Could have been cheaper: ${s.cheaper} of ${s.picked} with a pick, using ${share}% of all subagent tokens (${s.cheaperTokens.toLocaleString('en-US')} of ${s.totalTokens.toLocaleString('en-US')}).`,
+    `Tool errors: ${s.toolErrors} across ${s.withErrors} subagents. These happened on the model each one actually ran on.`,
+    `Decision model: asked ${s.asked} times, ${s.askErrors} failed, median ${s.latencyMedianMs ?? '-'} ms.`,
+    '',
+    ...recent,
+  ].join('\n');
 }
 
 function tuneText(records: JournalRecord[]): string {

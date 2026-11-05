@@ -5,6 +5,7 @@ import { append, markOverride, recordOf, tune } from '../src/journal.ts'
 import type { JournalRecord } from '../src/journal.ts'
 import { decide, escalate, usageCap, initialState } from '../src/policy.ts'
 import type { DecideInput } from '../src/policy.ts'
+import { appendSpawn, kindOf, MAX_SPAWN_RECORDS, pickFor, recordOfSpawn, summarize } from '../src/spawn.ts'
 import { routeFor, tierOfModel } from '../src/tiers.ts'
 import type { Features, Tier } from '../src/types.ts'
 
@@ -229,4 +230,55 @@ test('confidence in the tier: 0 when spread over the tiers in play, 1 when one h
   // Fable mass counts toward the total, and the scale does not depend on whether Fable is allowed.
   expect(r(tierConfidence({ sonnet: 0.45, opus: 0.45, fable: 0.1 }))).toBe(0.175)
   expect(tierConfidence({})).toBe(0)
+})
+
+// --- Subagents ---
+
+test('a subagent with an explicit model or a definition of its own is left alone', () => {
+  const engine = { plugin: 'engine' }
+  expect(kindOf({ subagentType: 'Explore', provider: engine })).toBe('explore')
+  expect(kindOf({ subagentType: 'general-purpose', provider: engine })).toBe('general')
+  expect(kindOf({ subagentType: 'Plan', provider: engine })).toBe('plan')
+  expect(kindOf({ subagentType: 'claude-code-guide', provider: engine })).toBe('builtin')
+  expect(kindOf({ subagentType: 'Explore', provider: { plugin: 'project' } })).toBe('custom')
+  expect(kindOf({ subagentType: 'Explore', provider: engine, model: 'opus' })).toBe('explicit')
+  expect(kindOf({ subagentType: 'general-purpose', provider: engine, fork: true })).toBe('fork')
+})
+
+test('a pick stays under what the subagent ran on and what the plan allows, and needs confidence', () => {
+  const s = { preference: 'balanced', minConfidence: 0.45, usage: { usedPercent: 10 } } as const
+  expect(pickFor(features(0), 'sonnet', s).pick).toBe('haiku')
+  expect(pickFor(features(4), 'sonnet', s).pick).toBe('sonnet')
+  expect(pickFor(features(4), 'opus', s).pick).toBe('opus')
+  expect(pickFor(features(4), 'opus', { ...s, usage: { usedPercent: 96 } }).pick).toBe('sonnet')
+  expect(pickFor(null, 'sonnet', s)).toEqual({ pick: null, reason: 'no-advice', confidence: null })
+  expect(pickFor(features(0), null, s).pick).toBe(null)
+  expect(pickFor(features(0), 'sonnet', { ...s, minConfidence: 1.1 }).reason).toBe('low-confidence')
+})
+
+test('security-sensitive subagent work keeps its Sonnet floor', () => {
+  const s = { preference: 'balanced', minConfidence: 0, usage: { usedPercent: 10 } } as const
+  expect(pickFor(features(0, { security: 0.9 }), 'sonnet', s).pick).toBe('sonnet')
+})
+
+test('the summary counts a cheaper pick only when it is below what ran', () => {
+  const r = (over: Partial<ReturnType<typeof recordOfSpawn>>) => ({ ...recordOfSpawn('x', 0, 'general', 'sonnet'), inputTokens: 90, outputTokens: 10, ...over })
+  const s = summarize([r({ pick: 'haiku', reason: 'advice', latencyMs: 40 }), r({ pick: 'sonnet', reason: 'advice', latencyMs: 60 }), r({ kind: 'plan', reason: 'not-routed' }), r({ reason: 'no-advice', error: 'down', toolErrors: 2 })])
+  expect(s.seen).toBe(4)
+  expect(s.picked).toBe(2)
+  expect(s.cheaper).toBe(1)
+  expect(s.cheaperTokens).toBe(100)
+  expect(s.totalTokens).toBe(400)
+  expect(s.toolErrors).toBe(2)
+  expect(s.withErrors).toBe(1)
+  expect(s.asked).toBe(3)
+  expect(s.askErrors).toBe(1)
+  expect(s.latencyMedianMs).toBe(60)
+})
+
+test('the subagent log is capped', () => {
+  let log: ReturnType<typeof appendSpawn> = []
+  for (let i = 0; i < MAX_SPAWN_RECORDS + 5; i += 1) log = appendSpawn(log, recordOfSpawn(String(i), i, 'plan', 'sonnet'))
+  expect(log.length).toBe(MAX_SPAWN_RECORDS)
+  expect(log[0].id).toBe('5')
 })

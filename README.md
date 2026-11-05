@@ -54,6 +54,7 @@ The router starts in **watch** mode: the band under the prompt shows what it wou
 | `/router pane` | Details: the current pick, plan usage, the decision log and tuning |
 | `/router route`, `watch`, `off` | Change the mode |
 | `/router pin opus` | Run the next turn on that model |
+| `/router subagents` | See what the router would pick for subagents. Off until you run `/router subagents watch`, and it changes no subagent's model |
 
 ![The details pane](plugin/docs/pane.png)
 

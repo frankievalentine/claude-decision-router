@@ -6,8 +6,6 @@ A Claude Code plugin that picks the Claude model for each turn, so you get the m
 
 A decision model (Cloudflare's Clef or TypeSafe's Jev) **describes** each task: what kind of work it is, how difficult, how much reasoning it needs, how much code it touches, whether it's security-sensitive, and whether it continues the task already running. The router then **decides**: it turns those answers into a probability for each tier and applies a switching policy that knows about your plan's 5-hour and weekly limits.
 
-Decision models are good at describing tasks and poor at choosing models directly (in a published paired evaluation, neither Jev nor an open-weight rival beat chance at zero-shot model routing). So the decision model never names a model here.
-
 ## How a turn runs
 
 1. **`turn.start`**: the request to the decision model starts as soon as the turn exists, so its answer is usually ready by the first model request. A turn with no typed text (a continuation) asks nothing and keeps its route.
@@ -129,7 +127,20 @@ Set `backend` to `local`, `local_url` to `http://127.0.0.1:30000/v1/systemone`, 
 - `/router route | watch | off | on`: change the mode (remembered across sessions)
 - `/router pin haiku | sonnet | opus | fable`: run the next turn on that tier
 - `/router log [n]`: the last decisions, with difficulty, confidence and corrections, and `leaned` where the decision model pointed at a different tier than the one used
+- `/router subagents`: what the router would have picked for each subagent (see below). `/router subagents watch` turns it on, `/router subagents off` turns it off
 - `/router tune`: tier mix, where the decision model leaned before the confidence filter and the policy, how often you corrected the router up or down, decision-model latency, and which way to adjust
+
+## Watching subagents
+
+The router picks models for the main conversation only: a subagent runs on whatever Claude Code resolves for it. To see what routing subagents could save, run `/router subagents watch`. It is off by default, and it never changes a subagent's model.
+
+- **File search** (`Explore`) counts as Haiku, without asking the decision model.
+- **General tasks** (`general-purpose`) are put to the decision model in the background, one at a time, so a subagent starts no later. A pick is never above the model the subagent ran on.
+- **Everything else** gets no pick: `Plan`, custom and plugin agents, forks, teammates, workflow agents, resumed runs, and any call that names a model.
+
+**Turning it on sends more text out.** The task text of each general subagent goes to your decision model, as main prompts do. With a hosted backend that means Cloudflare or TypeSafe, and task text often includes code and project details. The subagent log itself holds labels and numbers only.
+
+`/router subagents` reports how many subagents could have used a cheaper model and what share of their tokens that covers, plus their tool errors. The errors happened on the model each subagent actually ran on, so they say nothing yet about how a cheaper one would have done. Watching keeps to its own log and failure count, and it holds back while a main turn is asking, so it does not affect `/router log`, `/router tune` or main routing.
 
 ## Calibration
 
@@ -141,6 +152,7 @@ Every decision is journaled (labels and numbers only, never prompt text) with wh
 hooks/router.ts      Claude Code events in, decisions out. The only file that calls the mods API.
 src/features.ts      Answers to a tier distribution
 src/policy.ts        When to switch; plan-usage gate; escalation
+src/spawn.ts         Subagent watching: which ones get a pick, the pick, and their log
 src/classifier.ts    Backends and the System One wire format
 src/journal.ts       Decision log and tuning
 src/tiers.ts         Models, efforts, availability fallback

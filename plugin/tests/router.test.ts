@@ -690,3 +690,287 @@ test('settings saved under the old router-enhanced name carry over', async ($, o
   // Routing is on, as it was saved.
   expect(seen.models[0]).toBe('claude-haiku-5-5')
 })
+
+// --- Watching subagents ---
+
+const SPAWN_LOG = 'decision-router:subagent-log'
+const ENGINE = { plugin: 'engine', tier: 'core' }
+// A stand-in for Claude Code starting the subagent: the model it resolves, unless the call names one.
+function subagents(on: any) {
+  const started: any[] = []
+  on('agent.spawn', ($: any, e: any) => {
+    started.push(e)
+    return { model: e.model ?? 'claude-sonnet-5-5', agentId: `agent-${started.length}` }
+  })
+  return started
+}
+const spawn = ($: any, subagentType: string, prompt = 'look through the code', extra: Record<string, unknown> = {}) =>
+  $.agent.spawn({ prompt, subagentType, description: 'task', provider: ENGINE, ...extra })
+// Lets the background line run: each await gives it a chance to move.
+async function settle(seen: any) {
+  for (let i = 0; i < 40; i += 1) await seen.clock.advance(100)
+}
+const spawnLog = (seen: any): any[] => (seen.store.get(SPAWN_LOG) as any[]) ?? []
+const watching = async ($: any) => $.command.run({ command: 'router', args: 'subagents watch' })
+
+test('subagents are not watched until asked, so no task text is sent', async ($, on) => {
+  const seen = stubs(on, { mode: 'route', level: 0 })
+  subagents(on)
+  await start($)
+  await spawn($, 'general-purpose')
+  await settle(seen)
+  expect(seen.bodies.length).toBe(0)
+  expect(spawnLog(seen)).toEqual([])
+  const text = await $.command.run({ command: 'router', args: 'subagents' })
+  expect(text.text).toMatch(/not watching/)
+})
+
+test('turning watching on says where task text goes, and the choice is remembered', async ($, on) => {
+  const seen = stubs(on, { mode: 'route' })
+  subagents(on)
+  await start($)
+  const on1 = await watching($)
+  expect(on1.text).toMatch(/also goes to .*Clef/)
+  expect(seen.store.get('decision-router:subagent-mode')).toBe('watch')
+  const usage = await $.command.run({ command: 'router', args: 'subagents banana' })
+  expect(usage.text).toMatch(/^Usage/)
+})
+
+test('a watched subagent starts exactly as asked, on its usual model', async ($, on) => {
+  const seen = stubs(on, { mode: 'route', level: 0 })
+  const started = subagents(on)
+  await start($)
+  await watching($)
+  const result = await spawn($, 'general-purpose', 'rename a variable')
+  await settle(seen)
+  expect(result.model).toBe('claude-sonnet-5-5')
+  expect(started[0].model).toBeUndefined()
+  expect(started[0].prompt).toBe('rename a variable')
+  const [r] = spawnLog(seen)
+  expect(r.kind).toBe('general')
+  expect(r.actual).toBe('sonnet')
+  expect(r.pick).toBe('haiku')
+  expect(r.reason).toBe('advice')
+})
+
+test('Explore gets Haiku by rule, without asking the decision model', async ($, on) => {
+  const seen = stubs(on, { mode: 'route' })
+  subagents(on)
+  await start($)
+  await watching($)
+  await spawn($, 'Explore')
+  await settle(seen)
+  expect(seen.bodies.length).toBe(0)
+  expect(spawnLog(seen)[0].pick).toBe('haiku')
+  expect(spawnLog(seen)[0].reason).toBe('rule')
+})
+
+test('what should be left alone gets no pick and no request', async ($, on) => {
+  const seen = stubs(on, { mode: 'route' })
+  subagents(on)
+  await start($)
+  await watching($)
+  await spawn($, 'Plan')
+  await spawn($, 'general-purpose', 'task', { model: 'opus' })
+  await spawn($, 'pinned', 'task', { provider: { plugin: 'project', tier: 'user' } })
+  await spawn($, 'Explore', 'task', { provider: { plugin: 'project', tier: 'user' } })
+  await spawn($, 'general-purpose', 'task', { fork: true })
+  await spawn($, 'general-purpose', 'task', { isTeammate: true })
+  await spawn($, 'general-purpose', 'task', { workflow: { runId: 'wf_1', agentIndex: 1 } })
+  await spawn($, 'general-purpose', 'task', { resume: { agentId: 'old' } })
+  await settle(seen)
+  expect(seen.bodies.length).toBe(0)
+  expect(spawnLog(seen).map((r) => r.kind)).toEqual(['plan', 'explicit', 'custom', 'custom', 'fork', 'teammate', 'workflow', 'resume'])
+  expect(spawnLog(seen).every((r) => r.pick === null)).toBe(true)
+})
+
+test('a pick never goes above the model the subagent ran on', async ($, on) => {
+  const seen = stubs(on, { mode: 'route', level: 4 })
+  subagents(on)
+  await start($)
+  await watching($)
+  await spawn($, 'general-purpose', 'redesign the scheduler')
+  await settle(seen)
+  expect(spawnLog(seen)[0].pick).toBe('sonnet')
+  const text = await $.command.run({ command: 'router', args: 'subagents' })
+  expect(text.text).toMatch(/Could have been cheaper: 0 of 1/)
+})
+
+test('a burst is asked about one at a time, and past the line it goes unasked', async ($, on) => {
+  let running = 0
+  let most = 0
+  const seen = stubs(on, {
+    mode: 'route',
+    level: 0,
+    fetch: async () => {
+      running += 1
+      most = Math.max(most, running)
+      await Promise.resolve()
+      await Promise.resolve()
+      running -= 1
+      return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify(answers(0)) } }
+    },
+  })
+  subagents(on)
+  await start($)
+  await watching($)
+  for (let i = 0; i < 12; i += 1) await spawn($, 'general-purpose', `task ${i}`)
+  await settle(seen)
+  expect(most).toBe(1)
+  const log = spawnLog(seen)
+  expect(log.length).toBe(12)
+  expect(log.filter((r) => r.reason === 'pending')).toEqual([])
+  expect(log.filter((r) => r.pick === 'haiku').length).toBeGreaterThanOrEqual(8)
+  expect(log.filter((r) => r.error === 'too many subagents at once').length).toBe(12 - log.filter((r) => r.pick === 'haiku').length)
+})
+
+test('a request for a main turn is not lost to a subagent waiting in line', async ($, on) => {
+  let release: (v: any) => void = () => {}
+  const ok = { value: { status: 200, ok: true, headers: {}, text: JSON.stringify(answers(0)) } }
+  let calls = 0
+  const seen = stubs(on, {
+    mode: 'route',
+    fetch: () => {
+      calls += 1
+      return calls === 1 ? new Promise((r) => (release = r)) : ok
+    },
+  })
+  subagents(on)
+  await start($)
+  await watching($)
+  await spawn($, 'general-purpose')
+  await seen.clock.advance(0)
+  await $.turn.start({ turnId: 't1', text: 'where is parseConfig?' })
+  const first = step($, 't1', 0)
+  await seen.clock.advance(50)
+  release(ok)
+  await first
+  await settle(seen)
+  expect(calls).toBe(2)
+  const log = await $.command.run({ command: 'router', args: 'log' })
+  expect(log.text).not.toMatch(/still running/)
+  expect(log.text).toMatch(/haiku/)
+})
+
+test('a subagent waits while a main request is running, then goes unasked past one timeout', async ($, on) => {
+  const seen = stubs(on, { mode: 'route', fetch: () => new Promise(() => {}) })
+  subagents(on)
+  await start($)
+  await watching($)
+  await $.turn.start({ turnId: 't1', text: 'first prompt' })
+  await seen.clock.advance(0)
+  await spawn($, 'general-purpose')
+  await seen.clock.advance(3000)
+  await settle(seen)
+  expect(seen.bodies.length).toBe(1)
+  expect(spawnLog(seen)[0].error).toBe('a main turn was still asking')
+  expect(spawnLog(seen)[0].pick).toBe(null)
+})
+
+test('failures while watching subagents do not pause main routing', async ($, on) => {
+  const setup: Setup = { mode: 'route', level: 0, fetch: () => ({ value: { status: 500, ok: false, headers: {}, text: 'down' } }) }
+  const seen = stubs(on, setup)
+  subagents(on)
+  await start($)
+  await watching($)
+  for (let i = 0; i < 5; i += 1) await spawn($, 'general-purpose')
+  await settle(seen)
+  const faults = spawnLog(seen).map((r) => r.error)
+  expect(faults[0]).toMatch(/HTTP 500/)
+  expect(faults[4]).toMatch(/paused for a minute/)
+  setup.fetch = undefined
+  await turn($, 't1', 'where is parseConfig?')
+  expect(seen.models[0]).toBe('claude-haiku-5-5')
+})
+
+test('tokens and tool errors are added up per subagent and saved when it finishes', async ($, on) => {
+  const seen = stubs(on, { mode: 'route', level: 0 })
+  subagents(on)
+  on('turn.complete', () => ({ text: '' }))
+  await start($)
+  await watching($)
+  const { agentId } = await spawn($, 'Explore')
+  await settle(seen)
+  const stream = $.turn.step({ turnId: 'sub', index: 0, model: 'claude-sonnet-5-5', messageCount: 1, agentId })
+  let s = await stream.next()
+  while (s.done !== true) s = await stream.next()
+  await $.tool.call({ tool: 'Bash', command: 'fail', agentId })
+  await $.turn.complete({ turnId: 'sub', agentId, answer: 'done', durationMs: 1, isAborted: false, reason: 'answer' })
+  const [r] = spawnLog(seen)
+  expect(r.inputTokens).toBe(1000)
+  expect(r.cachedTokens).toBe(900)
+  expect(r.outputTokens).toBe(10)
+  expect(r.toolErrors).toBe(1)
+  const text = await $.command.run({ command: 'router', args: 'subagents' })
+  expect(text.text).toMatch(/Could have been cheaper: 1 of 1 with a pick, using 100% of all subagent tokens \(1,010 of 1,010\)/)
+  expect(text.text).toMatch(/Tool errors: 1 across 1 subagents/)
+})
+
+test('nothing of a subagent\'s prompt is saved', async ($, on) => {
+  const seen = stubs(on, { mode: 'route', level: 0 })
+  subagents(on)
+  await start($)
+  await watching($)
+  await spawn($, 'general-purpose', 'SECRET-PROMPT-TEXT in the task')
+  await settle(seen)
+  expect(seen.bodies[0].body.input ?? JSON.stringify(seen.bodies[0].body)).toMatch(/SECRET-PROMPT-TEXT/)
+  expect(JSON.stringify([...seen.store.entries()])).not.toMatch(/SECRET-PROMPT-TEXT/)
+})
+
+test('watching stays out of the main log, and a subagent\'s request leaves the main route alone', async ($, on) => {
+  const seen = stubs(on, { mode: 'route', level: 0 })
+  subagents(on)
+  await start($)
+  await watching($)
+  await spawn($, 'general-purpose')
+  await settle(seen)
+  expect(seen.store.get('decision-router:journal')).toBeUndefined()
+  const stream = $.turn.step({ turnId: 'sub', index: 0, model: 'claude-sonnet-5-5', messageCount: 1, agentId: 'agent-1' })
+  let s = await stream.next()
+  while (s.done !== true) s = await stream.next()
+  expect(seen.models).toEqual(['claude-sonnet-5-5'])
+})
+
+test('turning watching off clears the line and stops new records', async ($, on) => {
+  const seen = stubs(on, { mode: 'route', fetch: () => new Promise(() => {}) })
+  subagents(on)
+  await start($)
+  await watching($)
+  await spawn($, 'general-purpose', 'one')
+  await spawn($, 'general-purpose', 'two')
+  await seen.clock.advance(0)
+  const off = await $.command.run({ command: 'router', args: 'subagents off' })
+  expect(off.text).toMatch(/off/)
+  await spawn($, 'Explore')
+  expect(spawnLog(seen).map((r) => r.kind)).toEqual(['general', 'general'])
+  expect(spawnLog(seen)[1].error).toBe('watching was turned off')
+})
+
+test('a subagent request that times out is recorded at once, and nothing new goes out until it settles', async ($, on) => {
+  const seen = stubs(on, { mode: 'route', fetch: () => new Promise(() => {}) })
+  subagents(on)
+  await start($)
+  await watching($)
+  await spawn($, 'general-purpose', 'one')
+  await spawn($, 'general-purpose', 'two')
+  await settle(seen)
+  expect(spawnLog(seen)[0].error).toMatch(/timed out after 2\.5 s/)
+  expect(spawnLog(seen)[1].reason).toBe('pending')
+  expect(seen.bodies.length).toBe(1)
+})
+
+test('a subagent\'s own turn sends nothing and leaves the main turn\'s state alone', async ($, on) => {
+  const seen = stubs(on, { mode: 'route', level: 2 })
+  await start($)
+  await $.turn.start({ turnId: 't1', text: 'run the failing command' })
+  await step($, 't1', 0)
+  await $.tool.call({ tool: 'Bash', command: 'fail' })
+  await $.tool.call({ tool: 'Bash', command: 'fail' })
+  await $.tool.call({ tool: 'Bash', command: 'fail' })
+  const asked = seen.bodies.length
+  await $.turn.start({ turnId: 'sub', text: 'SUBAGENT-TASK-TEXT', agentId: 'agent-1' })
+  await seen.clock.advance(0)
+  expect(seen.bodies.length).toBe(asked)
+  await step($, 't1', 1)
+  expect(seen.models[1]).toBe('claude-opus-5-5')
+})
