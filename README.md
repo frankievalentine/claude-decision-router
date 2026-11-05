@@ -1,6 +1,6 @@
 # claude-decision-router
 
-A Claude Code plugin that picks the Claude model for each turn, so your subscription goes further without you choosing models by hand.
+A Claude Code plugin that picks the Claude model for each turn, and for the subagents Claude starts if you turn that on, so your subscription goes further without you choosing models by hand.
 
 A small decision model reads each prompt and describes it: how hard, how much code, whether it touches security. A policy that knows your plan's 5-hour and weekly limits turns that into Haiku, Sonnet, Opus or Fable. Run the decision model on your own machine with llama.cpp or Unsloth, or use a hosted one.
 
@@ -38,6 +38,22 @@ Run `/router setup`, choose **llama.cpp**, and it finds the server on port 9931.
 
 `/router test` tries the configured decision model again at any time and says what is wrong if it does not answer.
 
+## How it works
+
+Every time you send a prompt, the router picks a model before Claude answers:
+
+1. **A small decision model reads your prompt.** It describes the task: what kind of work it is, how hard, and whether it touches security. It never picks a model itself.
+2. **The router picks the model.** It turns that description into Haiku, Sonnet, Opus or Fable. Easy tasks get a cheaper model, and hard ones get a stronger model.
+3. **Claude answers on that model.** A toast tells you when the model changes and why.
+
+The router is careful about switching. It won't flip on one answer, and it holds back when the switch would throw away a long cached conversation. It also uses cheaper models as your 5-hour and weekly limits fill up. If the decision model can't be reached or isn't sure, your current model stays.
+
+**Subagents.** When Claude hands work to a subagent, that subagent doesn't follow the pick above. It runs on the model you started the session with. Turn on `/router subagents on` and the router picks for subagents too: file searches run on Haiku, general tasks go through the same decision model, and everything else is left alone. A subagent never gets a stronger model than it would have had anyway, so this only moves work to cheaper models.
+
+You stay in control: `/model` pauses the router, and `/router pin opus` sets the next turn's model.
+
+**Privacy:** your prompt goes to the decision model, and with subagents on, so does each general subagent's task. With llama.cpp or Unsloth it stays on your server, and with Cloudflare or TypeSafe it goes to them. The router's own log never keeps prompt text.
+
 ## Use
 
 The router starts in **watch** mode: the band under the prompt shows what it would pick and why, and nothing changes. After a few days, when the picks look right:
@@ -54,9 +70,24 @@ The router starts in **watch** mode: the band under the prompt shows what it wou
 | `/router pane` | Details: the current pick, plan usage, the decision log and tuning |
 | `/router route`, `watch`, `off` | Change the mode |
 | `/router pin opus` | Run the next turn on that model |
-| `/router subagents` | See what the router would pick for subagents. Off until you run `/router subagents watch`, and it changes no subagent's model |
+| `/router subagents on` | Let the router set subagent models too (off by default) |
+| `/router subagents` | See what the router did for each subagent |
 
 ![The details pane](plugin/docs/pane.png)
+
+### Subagents
+
+Subagents don't follow the router's pick for your main conversation. Unless something names a model, a subagent runs on the model you started the session with, even for simple file searches. `/router subagents on` changes that:
+
+| Subagent | What the router does |
+|---|---|
+| `Explore` (file search) | Runs it on Haiku, without asking the decision model |
+| `general-purpose` | Asks the decision model how hard the task is, then sets the model and effort |
+| Anything else, or a call that names a model | Leaves it alone |
+
+A subagent never goes above the model it would have used anyway, so this only ever moves work to a cheaper model. Three tool errors move it back up one tier. If the decision model doesn't answer in time, the subagent starts on its usual model. To see the picks without changing anything, use `/router subagents watch`.
+
+Turning this on sends each general subagent's task text to your decision model, and that text can include code. With a hosted backend it goes to Cloudflare or TypeSafe; with llama.cpp or Unsloth it stays on your server.
 
 ## Updating
 

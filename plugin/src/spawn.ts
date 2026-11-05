@@ -1,13 +1,13 @@
-// What the router would pick for a subagent, without changing anything. Which subagents get a pick, the pick itself,
-// and the log of what each one then used. Records hold labels and numbers only, never the subagent's prompt. Pure:
-// every input is an argument.
+// Models for subagents. Which subagents get a pick, the pick itself, and the log of what each one then used. Records
+// hold labels and numbers only, never the subagent's prompt. Pure: every input is an argument.
 
 import { mostLikely, tierConfidence, tierDistribution } from './features.ts';
 import { usageCap } from './policy.ts';
-import { rank } from './tiers.ts';
+import { rank, TIERS } from './tiers.ts';
 import type { Features, PlanUsage, Preference, Tier } from './types.ts';
 
-export type SpawnMode = 'watch' | 'off';
+/** on: a pick sets the subagent's model. watch: a pick is only recorded. off: subagents are left out altogether. */
+export type SpawnMode = 'on' | 'watch' | 'off';
 
 /** What sort of subagent this is. Only `explore` and `general` get a pick. */
 export type SpawnKind = 'explore' | 'general' | 'plan' | 'builtin' | 'custom' | 'explicit' | 'fork' | 'teammate' | 'workflow' | 'resume';
@@ -22,7 +22,7 @@ export type SpawnRecord = {
   kind: SpawnKind;
   /** The tier it ran on, or null for a model the router does not know. */
   actual: Tier | null;
-  /** The tier the router would have used, or null without a pick. */
+  /** The tier the router chose, or null without a pick. */
   pick: Tier | null;
   reason: PickReason;
   activity: string | null;
@@ -34,6 +34,12 @@ export type SpawnRecord = {
   cachedTokens: number;
   outputTokens: number;
   toolErrors: number;
+  /** The tier it would have run on without the router. Absent on watched records, whose `actual` says the same. */
+  usual?: Tier | null;
+  /** True when the router set its model. */
+  routed?: boolean;
+  /** True when repeated tool errors moved it up a tier. */
+  escalated?: boolean;
 };
 
 export const MAX_SPAWN_RECORDS = 400;
@@ -70,16 +76,22 @@ const atMost = (t: Tier, cap: Tier): Tier => (rank(t) > rank(cap) ? cap : t);
 export type SpawnSettings = { preference: Preference; minConfidence: number; usage: PlanUsage };
 
 /**
- * The pick for a general subagent from the decision model's answer: never above what it actually ran on, or what the
- * plan's usage allows. Fable stays out of it, and security-sensitive work keeps its floor from the tier distribution.
+ * The pick for a general subagent from the decision model's answer: never above `ceiling`, the tier it would run on
+ * anyway, or what the plan's usage allows. Fable stays out of it, and security-sensitive work keeps its floor from the
+ * tier distribution.
  */
-export function pickFor(features: Features | null, actual: Tier | null, s: SpawnSettings): { pick: Tier | null; reason: PickReason; confidence: number | null } {
+export function pickFor(features: Features | null, ceiling: Tier | null, s: SpawnSettings): { pick: Tier | null; reason: PickReason; confidence: number | null } {
   if (!features) return { pick: null, reason: 'no-advice', confidence: null };
   const distribution = tierDistribution(features, { preference: s.preference, allowFable: false });
   const confidence = Math.round(tierConfidence(distribution) * 100) / 100;
-  if (!actual) return { pick: null, reason: 'not-routed', confidence };
+  if (!ceiling) return { pick: null, reason: 'not-routed', confidence };
   if (confidence < s.minConfidence) return { pick: null, reason: 'low-confidence', confidence };
-  return { pick: atMost(atMost(mostLikely(distribution), actual), usageCap(s.usage)), reason: 'advice', confidence };
+  return { pick: atMost(atMost(mostLikely(distribution), ceiling), usageCap(s.usage)), reason: 'advice', confidence };
+}
+
+/** One tier up after repeated tool errors, or null when `ceiling` leaves no room. */
+export function escalatedTier(tier: Tier, ceiling: Tier): Tier | null {
+  return rank(tier) < rank(ceiling) ? TIERS[rank(tier) + 1] : null;
 }
 
 export function recordOfSpawn(id: string, at: number, kind: SpawnKind, actual: Tier | null): SpawnRecord {
@@ -108,16 +120,25 @@ export function addUsage(r: SpawnRecord, usage: any): Partial<SpawnRecord> {
   };
 }
 
-export const isCheaper = (r: SpawnRecord): boolean => r.pick !== null && r.actual !== null && rank(r.pick) < rank(r.actual);
+/** The pick is below what the subagent would run on without the router. */
+export function isCheaper(r: SpawnRecord): boolean {
+  const usual = r.usual ?? r.actual;
+  return r.pick !== null && usual !== null && rank(r.pick) < rank(usual);
+}
 
 export type SpawnSummary = {
   seen: number;
   byKind: Partial<Record<SpawnKind, number>>;
-  /** Subagents with a pick, and how many of those picks were cheaper than what ran. */
+  /** Watched subagents with a pick, and how many of those picks were cheaper than what ran. */
   picked: number;
   cheaper: number;
-  /** All tokens of the subagents with a cheaper pick: the work a route could have moved. */
+  /** All tokens of the watched subagents with a cheaper pick: the work routing could have moved. */
   cheaperTokens: number;
+  /** Subagents whose model the router set, and how many of those ran cheaper than usual. */
+  routed: number;
+  moved: number;
+  movedTokens: number;
+  escalated: number;
   totalTokens: number;
   toolErrors: number;
   /** Subagents that hit at least one tool error. */
@@ -133,7 +154,10 @@ export function summarize(records: SpawnRecord[]): SpawnSummary {
   const total = (rs: SpawnRecord[], f: (r: SpawnRecord) => number) => rs.reduce((s, r) => s + f(r), 0);
   const byKind: Partial<Record<SpawnKind, number>> = {};
   for (const r of records) byKind[r.kind] = (byKind[r.kind] ?? 0) + 1;
-  const cheaper = records.filter(isCheaper);
+  const watched = records.filter((r) => !r.routed);
+  const cheaper = watched.filter(isCheaper);
+  const routed = records.filter((r) => r.routed);
+  const moved = routed.filter(isCheaper);
   const asked = records.filter((r) => r.kind === 'general' && r.reason !== 'pending' && r.reason !== 'not-routed');
   const latencies = asked
     .map((r) => r.latencyMs)
@@ -142,9 +166,13 @@ export function summarize(records: SpawnRecord[]): SpawnSummary {
   return {
     seen: records.length,
     byKind,
-    picked: records.filter((r) => r.pick !== null).length,
+    picked: watched.filter((r) => r.pick !== null).length,
     cheaper: cheaper.length,
     cheaperTokens: total(cheaper, tokensOf),
+    routed: routed.length,
+    moved: moved.length,
+    movedTokens: total(moved, tokensOf),
+    escalated: records.filter((r) => r.escalated).length,
     totalTokens: total(records, tokensOf),
     toolErrors: total(records, (r) => r.toolErrors),
     withErrors: records.filter((r) => r.toolErrors > 0).length,

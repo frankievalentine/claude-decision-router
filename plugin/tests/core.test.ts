@@ -5,7 +5,7 @@ import { append, markOverride, recordOf, tune } from '../src/journal.ts'
 import type { JournalRecord } from '../src/journal.ts'
 import { decide, escalate, usageCap, initialState } from '../src/policy.ts'
 import type { DecideInput } from '../src/policy.ts'
-import { appendSpawn, kindOf, MAX_SPAWN_RECORDS, pickFor, recordOfSpawn, summarize } from '../src/spawn.ts'
+import { appendSpawn, escalatedTier, isCheaper, kindOf, MAX_SPAWN_RECORDS, pickFor, recordOfSpawn, summarize } from '../src/spawn.ts'
 import { routeFor, tierOfModel } from '../src/tiers.ts'
 import type { Features, Tier } from '../src/types.ts'
 
@@ -281,4 +281,21 @@ test('the subagent log is capped', () => {
   for (let i = 0; i < MAX_SPAWN_RECORDS + 5; i += 1) log = appendSpawn(log, recordOfSpawn(String(i), i, 'plan', 'sonnet'))
   expect(log.length).toBe(MAX_SPAWN_RECORDS)
   expect(log[0].id).toBe('5')
+})
+
+test('a routed subagent counts as moved, not as could-have-been-cheaper', () => {
+  const routed = { ...recordOfSpawn('a', 0, 'general', 'haiku'), pick: 'haiku' as const, reason: 'advice' as const, usual: 'sonnet' as const, routed: true, inputTokens: 90, outputTokens: 10 }
+  expect(isCheaper(routed)).toBe(true)
+  const s = summarize([routed])
+  expect(s.routed).toBe(1)
+  expect(s.moved).toBe(1)
+  expect(s.movedTokens).toBe(100)
+  expect(s.picked).toBe(0)
+  expect(s.cheaper).toBe(0)
+})
+
+test('an escalation stops at the ceiling', () => {
+  expect(escalatedTier('haiku', 'sonnet')).toBe('sonnet')
+  expect(escalatedTier('sonnet', 'sonnet')).toBe(null)
+  expect(escalatedTier('haiku', 'opus')).toBe('sonnet')
 })
