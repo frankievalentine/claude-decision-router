@@ -34,8 +34,6 @@ Run `/router setup`. It asks which decision model to use, finds your server (or 
 llama-server -m Clef-Flash-Q8_0.gguf --port 9931 -ngl all -c 4096 -b 4096 -ub 4096 -np 1
 ```
 
-Run `/router setup`, choose **llama.cpp**, and it finds the server on port 9931. For a server on another machine, type its address when asked, for example `10.0.0.9:9931`. What each flag does is in [plugin/README.md](plugin/README.md#clef-or-laya-with-llamacpp).
-
 `/router test` tries the configured decision model again at any time and says what is wrong if it does not answer.
 
 ## How it works
