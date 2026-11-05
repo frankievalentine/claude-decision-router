@@ -73,20 +73,6 @@ The router starts in **watch** mode: the band under the prompt shows what it wou
 
 ![The details pane](plugin/docs/pane.png)
 
-### Subagents
-
-Subagents don't follow the router's pick for your main conversation. Unless something names a model, a subagent runs on the model you started the session with, even for simple file searches. `/router subagents on` changes that:
-
-| Subagent | What the router does |
-|---|---|
-| `Explore` (file search) | Runs it on Haiku, without asking the decision model |
-| `general-purpose` | Asks the decision model how hard the task is, then sets the model and effort |
-| Anything else, or a call that names a model | Leaves it alone |
-
-A subagent never goes above the model it would have used anyway, so this only ever moves work to a cheaper model. Three tool errors move it back up one tier. If the decision model doesn't answer in time, the subagent starts on its usual model. To see the picks without changing anything, use `/router subagents watch`.
-
-Turning this on sends each general subagent's task text to your decision model, and that text can include code. With a hosted backend it goes to Cloudflare or TypeSafe; with llama.cpp or Unsloth it stays on your server.
-
 ## Updating
 
 Run `claude plugin marketplace update decision-router-local`, then `claude plugin update decision-router@decision-router-local`, then restart Claude Code.
