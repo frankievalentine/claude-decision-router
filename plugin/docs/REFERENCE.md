@@ -194,8 +194,9 @@ src/settings.ts      The settings' labels, their internal values, and moving old
 src/view.ts          The band and the pane (claude-router's design)
 tests/               claude plugin test: unit tests and end-to-end tests of the hooks module
 docs/                This reference and its screenshots
-scripts/             render-docs.sh: the README screenshots, drawn by the same code as the plugin, with an overflow check
 ```
+
+The screenshot script sits outside the plugin, in the repository's `scripts/`: `render-docs.sh` draws the README screenshots with the same code as the plugin and checks that nothing draws past its edge.
 
 Run the tests with `claude plugin test` and check the module with `claude plugin validate .`.
 

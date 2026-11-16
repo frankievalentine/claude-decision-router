@@ -67,6 +67,6 @@ Your prompt goes to the decision model you choose: it stays on your server with 
 
 - **Update:** `claude plugin marketplace update decision-router-local`, then `claude plugin update decision-router@decision-router-local`, then restart Claude Code.
 - **Reference:** [plugin/docs/REFERENCE.md](plugin/docs/REFERENCE.md) covers the switching policy, every decision model (including SGLang), every setting and the source layout.
-- **Develop:** run `claude --plugin-dir ./plugin`, which hot-reloads your edits. In `plugin/`, `claude plugin test` runs the tests, `claude plugin validate .` checks the plugin, and `scripts/render-docs.sh` regenerates the terminal screenshots. Bump the version in `plugin/.claude-plugin/plugin.json` with each change, because `claude plugin update` compares versions.
+- **Develop:** run `claude --plugin-dir ./plugin`, which hot-reloads your edits. In `plugin/`, `claude plugin test` runs the tests and `claude plugin validate .` checks the plugin; `scripts/render-docs.sh` regenerates the terminal screenshots. Bump the version in `plugin/.claude-plugin/plugin.json` with each change, because `claude plugin update` compares versions.
 
 MIT, see [plugin/LICENSE](plugin/LICENSE). The switching policy and the band's design build on [claude-router](https://github.com/alexei-led/claude-router) by Alexei Ledenev (MIT).

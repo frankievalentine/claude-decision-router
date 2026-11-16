@@ -310,7 +310,7 @@ export function register(on: any, opts: Options) {
     $.ui.log(`router command args: ${JSON.stringify(e.args ?? null)}`, { to: 'debug' });
     const [verb, arg] = args.split(/\s+/);
     if (verb === 'on' || verb === 'route' || verb === 'watch' || verb === 'off') {
-      await setMode($, verb === 'on' ? (mode === 'off' ? 'watch' : mode) : verb);
+      await applyMode($, verb === 'on' ? (mode === 'off' ? 'watch' : mode) : verb);
       return { text: modeText() };
     }
     if (verb === 'pin') {
@@ -378,14 +378,14 @@ export function register(on: any, opts: Options) {
 
 function actionsOf($: any): Actions {
   return {
-    setMode: (m) => setMode($, m),
-    resume: () => setMode($, mode === 'off' ? 'watch' : mode),
+    setMode: (m) => applyMode($, m),
+    resume: () => applyMode($, mode === 'off' ? 'watch' : mode),
     pin: (tier) => pinNext($, tier),
     open: () => openPane($),
     close: () => closePane($),
     tab: (tab) => showTab($, tab),
-    toggleDetail: () => toggleDetail($),
-    setFable: (allow) => setFable($, allow),
+    toggleDetail: () => flipDetail($),
+    setFable: (allow) => saveFable($, allow),
     menu: () => openMenu($),
   };
 }
@@ -407,8 +407,8 @@ async function openMenu($: any) {
       step = pinMenu(snapshot());
       continue;
     }
-    if (choice.kind === 'mode') await setMode($, choice.mode);
-    else if (choice.kind === 'resume') await setMode($, mode === 'off' ? 'watch' : mode);
+    if (choice.kind === 'mode') await applyMode($, choice.mode);
+    else if (choice.kind === 'resume') await applyMode($, mode === 'off' ? 'watch' : mode);
     else if (choice.kind === 'pin') await pinNext($, choice.tier);
     else await openPane($);
     return;
@@ -439,7 +439,7 @@ async function adoptSavedChoices($: any) {
   } catch {}
 }
 
-async function setMode($: any, m: Mode) {
+async function applyMode($: any, m: Mode) {
   paused = false;
   mode = m;
   await $.store.set(MODE_KEY, mode);
@@ -467,7 +467,7 @@ async function pinNext($: any, tier: Tier | null) {
   $.ui.invalidate('ui.render');
 }
 
-async function toggleDetail($: any) {
+async function flipDetail($: any) {
   detail = !detail;
   await $.store.set(DETAIL_KEY, detail);
   $.ui.invalidate('ui.render');
@@ -475,7 +475,7 @@ async function toggleDetail($: any) {
 
 // The pane's Fable switch. It is kept in the plugin's storage, and saved to the Use Fable setting too where the
 // session can save settings (the terminal); the desktop app's sessions cannot.
-async function setFable($: any, allow: boolean) {
+async function saveFable($: any, allow: boolean) {
   fableChoice = { allow, setting: options.allow_fable === true };
   await $.store.set(FABLE_KEY, fableChoice);
   try {

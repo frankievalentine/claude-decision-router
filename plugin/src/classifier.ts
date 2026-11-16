@@ -41,7 +41,7 @@ export function llamaBase(url: string): string {
 
 /** "10.0.0.9:8888", for error messages: where the request went. */
 export function hostOf(url: string): string {
-  const m = /^[a-z]+:\/\/([^/]+)/i.exec(url);
+  const m = url.match(/^[a-z]+:\/\/([^/]+)/i);
   return m ? m[1] : url;
 }
 

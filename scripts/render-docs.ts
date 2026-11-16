@@ -8,11 +8,11 @@
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { routeFor } from '../src/tiers.ts';
-import type { JournalRecord } from '../src/journal.ts';
-import type { Actions, PaneTab, Snapshot } from '../src/view.ts';
-import { renderBand, renderPane } from '../src/view.ts';
-import type { Features, Tier } from '../src/types.ts';
+import { routeFor } from '../plugin/src/tiers.ts';
+import type { JournalRecord } from '../plugin/src/journal.ts';
+import type { Actions, PaneTab, Snapshot } from '../plugin/src/view.ts';
+import { renderBand, renderPane } from '../plugin/src/view.ts';
+import type { Features, Tier } from '../plugin/src/types.ts';
 
 // --- Element functions that return HTML ---
 
@@ -116,7 +116,7 @@ const base: Snapshot = {
 };
 
 const noop = () => {};
-const actions: Actions = { setMode: noop, resume: noop, pin: noop, open: noop, close: noop, tab: noop, toggleDetail: noop, menu: noop };
+const actions: Actions = { setMode: noop, resume: noop, pin: noop, open: noop, close: noop, tab: noop, toggleDetail: noop, setFable: noop, menu: noop };
 
 // --- Pages ---
 

@@ -1,7 +1,7 @@
 {
   "name": "decision-router",
   "displayName": "Decision Router",
-  "version": "0.12.4",
+  "version": "0.12.5",
   "description": "Picks the right Claude model for every message, so your plan lasts longer. Easy questions go to a faster model, hard problems to a stronger one, and you never have to switch models yourself.",
   "author": {
     "name": "frankievalentine",

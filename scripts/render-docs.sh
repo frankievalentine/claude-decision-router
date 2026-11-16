@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Renders the README screenshots and checks that nothing draws past its frame at any width.
-#   scripts/render-docs.sh [out dir]     screenshots go to docs/, the pages and a report to the out dir
+#   scripts/render-docs.sh [out dir]     screenshots go to plugin/docs/, the pages and a report to the out dir
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")/.." && pwd)"
@@ -16,8 +16,8 @@ while IFS='|' read -r file columns kind docs; do
     failed=1
   fi
   if [ "$kind" != "check" ] && [ -n "$docs" ]; then
-    agent-browser screenshot body "$here/docs/$docs" >/dev/null
-    echo "wrote docs/$docs"
+    agent-browser screenshot body "$here/plugin/docs/$docs" >/dev/null
+    echo "wrote plugin/docs/$docs"
   fi
 done < <(bun -e 'for (const m of await Bun.file(process.argv[1]).json()) console.log([m.file, m.columns, m.kind, m.docs ?? ""].join("|"))' "$out/manifest.json")
 

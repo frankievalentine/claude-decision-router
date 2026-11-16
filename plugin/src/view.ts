@@ -1099,7 +1099,7 @@ export function tuneAdvice(suggestion: 'raise' | 'lower' | 'keep', decisions: nu
 // --- The quick menu ---
 
 /** One step of the quick menu: a question and its 2-4 options, each with what choosing it does. */
-export type MenuStep = { question: string; options: { label: string; then: MenuChoice }[] };
+export type MenuStep = { question: string; options: { label: string; choice: MenuChoice }[] };
 export type MenuChoice =
   | { kind: 'mode'; mode: Mode }
   | { kind: 'resume' }
@@ -1113,20 +1113,20 @@ export function mainMenu(s: Snapshot): MenuStep {
     return {
       question: `Routing is ${s.paused ? 'paused' : 'off'}. Turn it on?`,
       options: [
-        { label: 'Route: switch models', then: { kind: 'mode', mode: 'route' } },
-        { label: 'Watch: show picks only', then: { kind: 'mode', mode: 'watch' } },
-        { label: 'Status and settings', then: { kind: 'details' } },
+        { label: 'Route: switch models', choice: { kind: 'mode', mode: 'route' } },
+        { label: 'Watch: show picks only', choice: { kind: 'mode', mode: 'watch' } },
+        { label: 'Status and settings', choice: { kind: 'details' } },
       ],
     };
   return {
     question: `Routing is ${s.mode === 'route' ? 'on' : 'watching'}. What would you like to change?`,
     options: [
       s.mode === 'route'
-        ? { label: 'Watch: show picks only', then: { kind: 'mode', mode: 'watch' } }
-        : { label: 'Route: switch models', then: { kind: 'mode', mode: 'route' } },
-      { label: s.pin ? `Pin next turn (now ${s.pin})` : 'Pin next turn', then: { kind: 'pin-menu' } },
-      { label: 'Turn off', then: { kind: 'mode', mode: 'off' } },
-      { label: 'Status and settings', then: { kind: 'details' } },
+        ? { label: 'Watch: show picks only', choice: { kind: 'mode', mode: 'watch' } }
+        : { label: 'Route: switch models', choice: { kind: 'mode', mode: 'route' } },
+      { label: s.pin ? `Pin next turn (now ${s.pin})` : 'Pin next turn', choice: { kind: 'pin-menu' } },
+      { label: 'Turn off', choice: { kind: 'mode', mode: 'off' } },
+      { label: 'Status and settings', choice: { kind: 'details' } },
     ],
   };
 }
@@ -1135,8 +1135,8 @@ export function mainMenu(s: Snapshot): MenuStep {
 export function pinMenu(s: Snapshot): MenuStep {
   const tiers = TIERS.filter((t) => t !== 'fable' || s.fable).filter((t) => t !== s.pin);
   const options: MenuStep['options'] = [
-    ...(s.pin ? [{ label: `Cancel the ${s.pin} pin`, then: { kind: 'pin', tier: null } as MenuChoice }] : []),
-    ...tiers.map((t) => ({ label: t, then: { kind: 'pin', tier: t } as MenuChoice })),
+    ...(s.pin ? [{ label: `Cancel the ${s.pin} pin`, choice: { kind: 'pin', tier: null } as MenuChoice }] : []),
+    ...tiers.map((t) => ({ label: t, choice: { kind: 'pin', tier: t } as MenuChoice })),
   ].slice(0, 4);
   return { question: 'Which model should the next turn run on?', options };
 }
@@ -1145,5 +1145,5 @@ export function pinMenu(s: Snapshot): MenuStep {
 export function choiceOf(step: MenuStep, answer: string): MenuChoice | null {
   const typed = answer.trim().toLowerCase();
   const hit = step.options.find((o) => o.label === answer) ?? step.options.find((o) => o.label.toLowerCase().startsWith(typed) && typed.length > 1);
-  return hit ? hit.then : null;
+  return hit ? hit.choice : null;
 }
