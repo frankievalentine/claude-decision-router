@@ -24,6 +24,16 @@ export function tierOfModel(id: string | null | undefined): Tier | null {
   return TIERS.find((t) => s.includes(t)) ?? null;
 }
 
+/** Whether two model ids name the same model: a dated id matches its undated one, and an alias any id of its family. */
+export function sameModel(a: string, b: string): boolean {
+  const plain = (id: string) => id.toLowerCase().replace(/\[.*\]$/, '').replace(/-\d{8}$/, '');
+  const x = plain(a);
+  const y = plain(b);
+  if (x === y) return true;
+  const alias = (id: string) => (TIERS as readonly string[]).includes(id);
+  return (alias(x) || alias(y)) && tierOfModel(x) === tierOfModel(y);
+}
+
 /**
  * Claude Code's advisor pairing table for the models in MODEL_IDS: the oldest version of each family each main model
  * accepts as its advisor. An advisor must rank at or above the main model, so this changes with MODEL_IDS.

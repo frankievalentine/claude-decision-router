@@ -26,6 +26,8 @@ export type JournalRecord = {
   /** Both plan windows, of which `usedPercent` is the higher. Absent in records from before 0.8.1. */
   fiveHour?: number | null;
   sevenDay?: number | null;
+  /** The model the API reported answering the turn's latest reply. Absent before 0.12.1 and for a turn with no reply. */
+  answered?: string | null;
 };
 
 export const MAX_RECORDS = 400;
@@ -71,6 +73,12 @@ export function markOverride(records: JournalRecord[], chosen: Tier | null): Jou
   if (!last || !chosen || chosen === last.tier) return records;
   const outcome: Outcome = rank(chosen) > rank(last.tier) ? 'override-up' : 'override-down';
   return [...records.slice(0, -1), { ...last, outcome }];
+}
+
+/** Marks the newest record with the model the API reported answering; the same array when that is already marked. */
+export function markAnswered(records: JournalRecord[], model: string): JournalRecord[] {
+  const last = records[records.length - 1];
+  return last && last.answered !== model ? [...records.slice(0, -1), { ...last, answered: model }] : records;
 }
 
 export function markEscalated(records: JournalRecord[]): JournalRecord[] {

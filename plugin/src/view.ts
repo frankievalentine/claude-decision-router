@@ -9,7 +9,8 @@
 import { mostLikely } from './features.ts';
 import type { JournalRecord } from './journal.ts';
 import { tune } from './journal.ts';
-import { rank, TIERS } from './tiers.ts';
+import { settingLabel } from './settings.ts';
+import { rank, sameModel, TIERS, tierOfModel } from './tiers.ts';
 import type { Activity, Decision, Features, Mode, Route, Tier } from './types.ts';
 
 export type Snapshot = {
@@ -40,6 +41,8 @@ export type Snapshot = {
   detail: boolean;
   /** Claude Code's advisor, by name, and the strongest tier it applies to; null without one. */
   advisor?: { name: string; cap: Tier } | null;
+  /** The model the API reported answering this turn's latest reply, and the one the request asked for; null until then. */
+  answered?: { model: string; asked: string } | null;
 };
 
 export type Actions = {
@@ -156,6 +159,15 @@ export function usageText(w: Snapshot['windows']): string {
   return parts.join(' · ');
 }
 
+/**
+ * Whether the reply came from the model the request asked for, by the API's own report: 'confirmed', 'mismatch', or
+ * null before a reply. In watch mode the band shows a pick that did not run, so there is nothing of it to confirm.
+ */
+export function answerState(s: Snapshot): 'confirmed' | 'mismatch' | null {
+  if (s.mode !== 'route' || !s.answered) return null;
+  return sameModel(s.answered.model, s.answered.asked) ? 'confirmed' : 'mismatch';
+}
+
 /** A plain-text summary of the band, for /router status and the debug log. */
 export function bandText(s: Snapshot): string {
   if (s.mode === 'off') return `Routing off · every turn uses ${modelName(s.nativeModel)}`;
@@ -165,8 +177,10 @@ export function bandText(s: Snapshot): string {
   if (!s.current) return `${s.mode === 'watch' ? 'Watching' : 'Routing on'} · ready${pinned}`;
   const { decision, route, features } = s.current;
   const verb = topActivity(features)[0]?.[0];
+  const answer = answerState(s);
   return [
-    `${decision.tier}${verb ? ` ${ACTIVITY_VERB[verb]} →` : ''} ${route ? routeLabel(route) : modelName(s.nativeModel)}`,
+    `${decision.tier}${verb ? ` ${ACTIVITY_VERB[verb]} →` : ''} ${route ? routeLabel(route) : modelName(s.nativeModel)}${answer === 'confirmed' ? ' ✓' : ''}`,
+    answer === 'mismatch' ? `answered by ${modelName(s.answered?.model)}` : null,
     s.mode === 'watch' ? 'watch only' : null,
     reasonText(decision),
     supportText(s.label, decision),
@@ -317,24 +331,32 @@ export function bandSegments(s: Snapshot, a: Actions): Segment[] {
 
   const { decision, route, features } = s.current;
   const verb = topActivity(features)[0]?.[0];
+  const answer = answerState(s);
   const main = segment(
     0,
     [...meter(decision.tier), pill(decision.tier, TIER_COLOR[decision.tier]), part(' ')],
     verb ? { ...part(`${ACTIVITY_VERB[verb]} → `, { color: COLOR.activity, italic: true }), priority: 2 } : null,
     part(route ? routeLabel(route) : modelName(s.nativeModel)),
+    answer === 'confirmed' ? part(' ✓', { color: 'green' }) : null,
   );
+  // A reply from another model than the one asked for is a fault too, and leads: where the band is narrow, the model
+  // that answered stays and the one asked for drops, so the band never claims a model that did not run.
+  const mismatch =
+    answer === 'mismatch' ? segment(0, part(`⚠ answered by ${modelName(s.answered?.model)}`, { color: COLOR.warn })) : null;
+  const lead = mismatch ? [mismatch, { ...main, priority: 1 }] : [main];
   // A fault leads: what to fix matters more than the model kept.
   if (s.error && decision.reason === 'no-advice')
     return [
       segment(0, part(`⚠ ${s.label}: ${s.error}`, { color: COLOR.warn })),
       segment(2, button({ key: 'band-fix', label: 'Details', onPress: a.open })),
       { ...main, priority: 1 },
+      mismatch && { ...mismatch, priority: 1 },
       pin,
       segment(3, part('keeping model', { color: COLOR.warn })),
     ].filter(Boolean) as Segment[];
   const support = supportText(s.label, decision);
   return [
-    main,
+    ...lead,
     watching,
     pin,
     segment(1, part(reasonText(decision), { dimColor: true })),
@@ -347,7 +369,8 @@ export function bandSegments(s: Snapshot, a: Actions): Segment[] {
 
 const advisorSegment = (s: Snapshot) => (s.advisor ? segment(4, part(`advisor ${s.advisor.name}`, { dimColor: true })) : null);
 
-const preferenceText = (s: Snapshot) => `${s.preference}${s.preference === 'balanced' ? ' (default)' : ''}`;
+// The Priority setting by the label the settings show it under.
+const preferenceText = (s: Snapshot) => `${settingLabel('preference', s.preference)}${s.preference === 'balanced' ? ' (default)' : ''}`;
 
 // --- Session summary, for the band's second row and the pane ---
 
@@ -533,6 +556,21 @@ export function renderPane(el: Elements, s: Snapshot, tab: PaneTab, a: Actions, 
           t(route ? routeLabel(route) : modelName(s.nativeModel), { weight: 'bold' }),
         ),
       );
+      const answer = answerState(s);
+      if (s.answered)
+        rows.push(
+          field(
+            'Answered by',
+            t(modelName(s.answered.model), { weight: 'bold', ...(answer === 'mismatch' ? { color: COLOR.warn } : {}) }),
+            answer === 'confirmed' ? t(' ✓', { color: 'green' }) : null,
+            dim(
+              answer === 'mismatch'
+                ? ` · not the ${modelName(s.answered.asked)} asked for: Claude Code can change models itself, as when one is overloaded`
+                : ' · as reported by the API',
+            ),
+          ),
+        );
+      else if (s.mode === 'route') rows.push(field('Answered by', dim('no reply reported yet')));
       const acts = topActivity(features);
       if (acts.length)
         rows.push(
@@ -670,13 +708,18 @@ export function renderPane(el: Elements, s: Snapshot, tab: PaneTab, a: Actions, 
         const outcome = r.outcome === 'ok' ? null : t(`  [${r.outcome}]`, { color: COLOR.warn });
         const reason = SHORT_REASON[r.reason] ?? r.reason;
         const leaned = r.lean && r.lean !== r.tier ? t(`  leaned ${r.lean}`, { color: TIER_COLOR[r.lean] }) : null;
+        // Watching, the session's own model runs and the tier is only the pick; routing, a different model is a fault.
+        const ran =
+          r.answered && tierOfModel(r.answered) !== r.tier
+            ? t(`  ran ${modelName(r.answered)}`, r.mode === 'route' ? { color: COLOR.warn } : { dimColor: true })
+            : null;
         // Where the pane is wide the entry is one line; narrower, the detail drops to a second line under the tier.
         if (columns >= LOG_WIDE)
-          return line(dim(`${when}  `), t(r.tier.padEnd(7), { weight: 'bold', color: TIER_COLOR[r.tier] }), dim(reason.padEnd(16)), what, leaned, outcome);
+          return line(dim(`${when}  `), t(r.tier.padEnd(7), { weight: 'bold', color: TIER_COLOR[r.tier] }), dim(reason.padEnd(16)), what, leaned, ran, outcome);
         return el.Box({
           flexDirection: 'column',
           children: [
-            line(dim(`${when}  `), t(r.tier, { weight: 'bold', color: TIER_COLOR[r.tier] }), dim(`  ${reason}`), leaned, outcome),
+            line(dim(`${when}  `), t(r.tier, { weight: 'bold', color: TIER_COLOR[r.tier] }), dim(`  ${reason}`), leaned, ran, outcome),
             line(t('  '), el.Box({ flexDirection: 'row', flexShrink: 1, children: [what] })),
           ],
         });
@@ -726,8 +769,8 @@ export function renderPane(el: Elements, s: Snapshot, tab: PaneTab, a: Actions, 
 
 export function tuneAdvice(suggestion: 'raise' | 'lower' | 'keep', decisions: number): string {
   if (decisions < 20) return 'Not enough decisions yet to suggest a change (20 needed).';
-  if (suggestion === 'raise') return 'You correct it upward more often: try preference quality.';
-  if (suggestion === 'lower') return 'You correct it downward more often: try preference cost.';
+  if (suggestion === 'raise') return 'You correct it upward more often: set Priority to Best answers.';
+  if (suggestion === 'lower') return 'You correct it downward more often: set Priority to Save usage.';
   return 'Corrections are balanced: keep the current settings.';
 }
 

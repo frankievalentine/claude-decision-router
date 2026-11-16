@@ -33,6 +33,8 @@ type Setup = {
   native?: string
   // Every model response carries an advisor call.
   advisor?: boolean
+  // The model every reply reports answering: the one asked for when left out, none at all when null.
+  answer?: string | null
 }
 
 // The settings most tests run with: Cloudflare, with an account ID and a token saved.
@@ -99,7 +101,8 @@ function stubs(on: any, setup: Setup) {
   on('turn.step', async function* ($: any, e: any) {
     seen.models.push(e.model)
     seen.efforts.push(e.effort)
-    const usage = { input_tokens: 0, output_tokens: 10, cache_read_input_tokens: 900, cache_creation_input_tokens: 100 }
+    const model = setup.answer === undefined ? e.model : setup.answer
+    const usage = { input_tokens: 0, output_tokens: 10, cache_read_input_tokens: 900, cache_creation_input_tokens: 100, ...(model ? { model } : {}) }
     const serverToolUses = setup.advisor ? [{ id: `adv-${e.index}`, name: 'advisor', input: {}, startedAt: 0, endedAt: 1 }] : undefined
     return { turnId: e.turnId, index: e.index, answer: 'ok', toolUses: [], serverToolUses, stopReason: 'end_turn', usage }
   })
@@ -419,7 +422,7 @@ test('the band draws the meter, tier pill, activity, route, reason and readings'
   expect(activity?.props.italic).toBe(true)
   expect(await ui.find({ type: 'Text', text: 'Opus 5.5 · high' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '• first pick' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'balanced (default)' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Balanced (default)' })).toBeDefined()
   expect((await ui.find({ type: 'Text', text: '10%' }))?.props.color).toBe('green')
   expect((await ui.find({ type: 'Text', text: '40%' }))?.props.color).toBe('green')
   expect(await ui.find({ type: 'Text', text: '90%' })).toBeDefined()
@@ -487,6 +490,63 @@ test('in the terminal the band leaves the space above the prompt; the desktop ap
   expect(await desktop.find({ type: 'Text', text: ' opus ' })).toBeDefined()
 })
 
+test('the band confirms the model the API reports answering, and the log keeps it', KEYS, async ($, on) => {
+  const seen = stubs(on, { mode: 'route', level: 0, answer: 'claude-haiku-5-5-20261101' })
+  engineDraws(on)
+  await start($)
+  await turn($, 't1', 'where is parseConfig defined?')
+  const band = await $.ui.mount(DESKTOP_BAND)
+  expect((await band.find({ type: 'Text', text: ' ✓' }))?.props.color).toBe('green')
+  expect(await band.find({ type: 'Text', text: /answered by/ })).toBeUndefined()
+  const status = await $.command.run({ command: 'router', args: 'status' })
+  expect(status.text).toMatch(/^haiku exploring → Haiku 5\.5 · low ✓ · /)
+  const [record] = seen.store.get('decision-router:journal') as any[]
+  expect(record.answered).toBe('claude-haiku-5-5-20261101')
+  const pane = await $.ui.mount(PANE)
+  expect(await pane.find({ type: 'Text', text: ' · as reported by the API' })).toBeDefined()
+})
+
+test('a reply from another model than the one asked for is flagged, not confirmed', KEYS, async ($, on) => {
+  stubs(on, { mode: 'route', level: 0, answer: 'claude-sonnet-5-5' })
+  engineDraws(on)
+  await start($)
+  await turn($, 't1', 'where is parseConfig defined?')
+  const band = await $.ui.mount(DESKTOP_BAND)
+  expect(await band.find({ type: 'Text', text: ' ✓' })).toBeUndefined()
+  expect((await band.find({ type: 'Text', text: '⚠ answered by Sonnet 5.5' }))?.props.color).toBe('#f0b429')
+  // The flag leads: where the band is narrow, the model asked for drops first.
+  const narrow = await $.ui.mount({ ...DESKTOP_BAND, props: { ...DESKTOP_BAND.props, bodyColumns: 40 } })
+  expect(await narrow.find({ type: 'Text', text: '⚠ answered by Sonnet 5.5' })).toBeDefined()
+  expect(await narrow.find({ type: 'Text', text: 'Haiku 5.5 · low' })).toBeUndefined()
+  const pane = await $.ui.mount(PANE)
+  expect(await pane.find({ type: 'Text', text: /not the Haiku 5\.5 asked for/ })).toBeDefined()
+  const log = await $.command.run({ command: 'router', args: 'log' })
+  expect(log.text).toMatch(/ran Sonnet 5\.5/)
+})
+
+test('without a reported model nothing is confirmed, and watching never shows a check', KEYS, async ($, on) => {
+  const setup: Setup = { mode: 'route', level: 0, answer: null }
+  const seen = stubs(on, setup)
+  engineDraws(on)
+  await start($)
+  await turn($, 't1', 'where is parseConfig defined?')
+  const band = await $.ui.mount(DESKTOP_BAND)
+  expect(await band.find({ type: 'Text', text: ' ✓' })).toBeUndefined()
+  const pane = await $.ui.mount(PANE)
+  expect(await pane.find({ type: 'Text', text: 'no reply reported yet' })).toBeDefined()
+  await band.unmount()
+  await pane.unmount()
+  await $.command.run({ command: 'router', args: 'watch' })
+  setup.answer = undefined
+  await turn($, 't2', 'redesign the scheduler')
+  const watching = await $.ui.mount(DESKTOP_BAND)
+  expect(await watching.find({ type: 'Text', text: ' ✓' })).toBeUndefined()
+  // The session's own model ran: the log keeps it, and the pane says so without a check.
+  const records = seen.store.get('decision-router:journal') as any[]
+  expect(records[records.length - 1].answered).toBe('claude-opus-5-5')
+  expect(records[0].answered).toBeUndefined()
+})
+
 test('the session row is switched on from the pane', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', level: 0 })
   engineDraws(on)
@@ -518,7 +578,7 @@ test('a narrow band drops readings before the route', KEYS, async ($, on) => {
   await turn($, 't1', 'debug the deadlock in the cache layer')
   const ui = await $.ui.mount({ ...HINT, viewport: { columns: 54, rows: 40 } })
   expect(await ui.find({ type: 'Text', text: 'Opus 5.5 · high' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'balanced (default)' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: 'Balanced (default)' })).toBeUndefined()
 })
 
 test('the spinner says Choosing model while the decision model answers', KEYS, async ($, on) => {
@@ -648,7 +708,7 @@ test('settings saved by earlier versions keep working', KEYS, async ($, on) => {
   const seen = stubs(on, { settings: SAVED({ mode: 'route', backend: 'llamacpp', preference: 'quality', local_url: 'http://10.0.0.9:9931' }) })
   await start($)
   // Claude Code handed the plugin defaults for the old values; the session uses the saved choices anyway.
-  expect((await run($, 'status')).text).toContain('Decision model: llama.cpp (llamacpp). Preference: quality.')
+  expect((await run($, 'status')).text).toContain('Decision model: llama.cpp (llamacpp). Priority: Best answers.')
   // The saved file is left as it is: the relabelling happens as the settings are read (see the core tests).
   expect(seen.config).toEqual([])
 })

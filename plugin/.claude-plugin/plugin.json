@@ -1,7 +1,7 @@
 {
   "name": "decision-router",
   "displayName": "Decision Router",
-  "version": "0.12.0",
+  "version": "0.12.1",
   "description": "Picks the right Claude model for every message, so your plan lasts longer. Easy questions go to a faster model, hard problems to a stronger one, and you never have to switch models yourself.",
   "author": {
     "name": "frankievalentine",
@@ -27,7 +27,7 @@
     "mode": {
       "type": "string",
       "title": "Mode",
-      "description": "Watch only shows which model the router would pick, without changing anything. Switch models lets it change the model for you. You can also change this at any time with /router.",
+      "description": "Watch only shows the picks. Switch models lets the router change models for you.",
       "options": [
         "Watch only",
         "Switch models",
@@ -37,8 +37,8 @@
     },
     "preference": {
       "type": "string",
-      "title": "What matters more",
-      "description": "Save usage leans toward faster, lighter models so your plan lasts longer. Best answers leans toward stronger models.",
+      "title": "Priority",
+      "description": "Save usage favors lighter models; Best answers favors stronger ones.",
       "options": [
         "Save usage",
         "Balanced",
@@ -48,14 +48,14 @@
     },
     "allow_fable": {
       "type": "boolean",
-      "title": "Use Fable for the hardest tasks",
-      "description": "Lets the router choose Fable for very hard tasks. Fable may use your usage credits instead of your plan.",
+      "title": "Use Fable",
+      "description": "For the hardest tasks. May use extra usage credits.",
       "default": false
     },
     "backend": {
       "type": "string",
       "title": "Decision model",
-      "description": "A small model that reads each message and rates how hard it is. Use a hosted service, or run one on your own computer so your messages stay with you.",
+      "description": "The small model that rates each message. Your own server keeps messages on your machine.",
       "options": [
         "Cloudflare Workers AI",
         "TypeSafe",
@@ -67,51 +67,51 @@
     "local_url": {
       "type": "string",
       "title": "Server address",
-      "description": "For llama.cpp, Unsloth or SGLang. Leave empty when the server runs on this computer on its usual port. Example: http://10.0.0.9:9931",
+      "description": "For your own server. Leave empty if it runs on this computer.",
       "default": ""
     },
     "local_api_key": {
       "type": "string",
       "title": "Server key",
-      "description": "For llama.cpp, Unsloth or SGLang, only if your server asks for a key. To remove a saved key, enter none.",
+      "description": "Only if your server asks for one. Enter none to remove it.",
       "sensitive": true
     },
     "cloudflare_account_id": {
       "type": "string",
       "title": "Cloudflare account ID",
-      "description": "For Cloudflare. You'll find it on the Workers AI page of your Cloudflare dashboard.",
+      "description": "Shown on the Workers AI page of your Cloudflare dashboard.",
       "default": ""
     },
     "cloudflare_api_token": {
       "type": "string",
       "title": "Cloudflare API token",
-      "description": "For Cloudflare. Create a token that can only use Workers AI. To remove a saved token, enter none.",
+      "description": "A token limited to Workers AI. Enter none to remove it.",
       "sensitive": true
     },
     "typesafe_api_key": {
       "type": "string",
       "title": "TypeSafe API key",
-      "description": "For TypeSafe. To remove a saved key, enter none.",
+      "description": "Enter none to remove it.",
       "sensitive": true
     },
     "decision_model": {
       "type": "string",
       "title": "Model name (advanced)",
-      "description": "Leave empty to use the usual model for your decision model. Set it only when your server runs several models.",
+      "description": "Only if your server runs several models.",
       "default": ""
     },
     "min_confidence": {
       "type": "number",
-      "title": "Confidence needed to switch (advanced)",
-      "description": "How sure the decision model must be before the router changes models. Higher means fewer switches. The default is 0.45.",
+      "title": "Confidence to switch (advanced)",
+      "description": "Higher means fewer switches. Default 0.45.",
       "default": 0.45,
       "min": 0,
       "max": 1
     },
     "timeout_ms": {
       "type": "number",
-      "title": "Wait time in milliseconds (advanced)",
-      "description": "How long to wait for the decision model before keeping your current model. 0 uses the default: 2.5 seconds for hosted services and 8 seconds for your own server.",
+      "title": "Wait time, ms (advanced)",
+      "description": "0 uses the default: 2,500 for hosted services, 8,000 for your own server.",
       "default": 0,
       "min": 0,
       "max": 30000

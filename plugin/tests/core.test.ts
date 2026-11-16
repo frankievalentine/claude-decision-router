@@ -1,13 +1,13 @@
 import { expect, test } from 'claude-code/testing'
 import { backendOf, confidenceOf, endpointFor, hostOf, parseAnswers, warmupBody } from '../src/classifier.ts'
 import { mostLikely, tierConfidence, tierDistribution } from '../src/features.ts'
-import { append, markOverride, recordOf, tune } from '../src/journal.ts'
+import { append, markAnswered, markOverride, recordOf, tune } from '../src/journal.ts'
 import type { JournalRecord } from '../src/journal.ts'
 import { capOf, decide, escalate, usageCap, initialState } from '../src/policy.ts'
 import type { DecideInput } from '../src/policy.ts'
 import { appendSpawn, escalatedTier, isCheaper, kindOf, MAX_SPAWN_RECORDS, pickFor, recordOfSpawn, summarize } from '../src/spawn.ts'
 import { resolveOptions, savedChoices, settingLabel, upgradeSettings, valueOf } from '../src/settings.ts'
-import { advisorCeiling, routeFor, tierOfModel } from '../src/tiers.ts'
+import { advisorCeiling, routeFor, sameModel, tierOfModel } from '../src/tiers.ts'
 import type { Features, Tier } from '../src/types.ts'
 
 // A features object with difficulty concentrated on `level` (0-4).
@@ -353,4 +353,22 @@ test('settings: only this plugin\'s earlier values are relabelled, and nothing e
   const current = { pluginConfigs: { 'decision-router@market': { options: { backend: 'TypeSafe' } } } }
   expect(upgradeSettings(current)).toBe(current)
   expect(upgradeSettings(undefined)).toBe(undefined)
+})
+
+test('sameModel matches dated ids, context suffixes and aliases, and nothing else', () => {
+  expect(sameModel('claude-sonnet-5-5', 'claude-sonnet-5-5-20261101')).toBe(true)
+  expect(sameModel('claude-opus-5-5[1m]', 'claude-opus-5-5')).toBe(true)
+  expect(sameModel('sonnet', 'claude-sonnet-5-5')).toBe(true)
+  expect(sameModel('claude-sonnet-5-5', 'claude-opus-5-5')).toBe(false)
+  expect(sameModel('claude-opus-5-5', 'claude-opus-4-7')).toBe(false)
+})
+
+test('markAnswered marks the newest record once', () => {
+  const at = (n: number) => ({ ...recordOf({ at: n, mode: 'route', decision: { tier: 'haiku', reason: 'first' } as any, features: null, usedPercent: null, latencyMs: null, error: null }) })
+  const records = [at(1), at(2)]
+  const marked = markAnswered(records, 'claude-haiku-5-5')
+  expect(marked[1].answered).toBe('claude-haiku-5-5')
+  expect(marked[0].answered).toBeUndefined()
+  expect(markAnswered(marked, 'claude-haiku-5-5')).toBe(marked)
+  expect(markAnswered([], 'claude-haiku-5-5')).toEqual([])
 })

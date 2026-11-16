@@ -12,7 +12,7 @@ Quick questions go to a fast, light model. Hard problems go to a stronger one. A
 
 1. **A small decision model reads your message** and rates it: how hard it is, how much code it touches, and whether it's security work. It never chooses a model itself.
 2. **The router picks Haiku, Sonnet, Opus or Fable** from that rating, your plan usage, and what you're already working on.
-3. **Claude answers on that model.** A short note tells you whenever the model changes, and why.
+3. **Claude answers on that model.** A short note tells you whenever the model changes, and why. Once the reply arrives, a check mark confirms the API reported that model answering it; if a different model answered, the router says so.
 
 It's careful about switching. It won't change models on a single message, it stays put in the middle of a task, and if the decision model can't be reached, your current model simply stays.
 
@@ -29,7 +29,31 @@ Type `/router` at any time for a quick menu: switch modes, choose the model for 
 
 Decision Router works wherever Claude Code runs: the terminal, your editor, and the Code tab of the Claude desktop app. In the desktop app, its status line appears above the prompt after your first message.
 
+The desktop app doesn't run `/router` commands. Click **Router** at the end of the status line for the quick menu and the details panel, and choose the decision model and add keys in the plugin's settings (Customize > Plugins). The model picker under the prompt keeps showing the model you chose for the session: the router changes the model one message at a time, and the check mark on the status line confirms which one answered.
+
 It also works alongside Claude Code's `/advisor`: it never picks a model stronger than your advisor, so the advisor keeps working.
+
+## Screenshots
+
+### Claude Code (terminal)
+
+The band under the prompt, with the model the router picked and why:
+
+![The band in the terminal, under the permission mode](docs/band.png)
+
+The details pane (`/router pane`): the current pick, plan usage, the decision log and tuning:
+
+![The details pane in the terminal](docs/pane.png)
+
+### Claude desktop app
+
+The band above the prompt in the Code tab, after the first message of a session:
+
+![The band above the prompt in the desktop app](docs/desktop-band.png)
+
+The quick menu, opened with **Router** at the end of the band:
+
+![The quick menu in the desktop app, opened from the band's Router button](docs/desktop-menu.png)
 
 ## What it sends, and where
 

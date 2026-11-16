@@ -22,9 +22,10 @@ A decision model (Cloudflare's Clef or TypeSafe's Jev) **describes** each task: 
 
 ![The band under the permission mode](band.png)
 
-- **The band**, on the line under the prompt, below the permission mode (`auto mode on`). In the desktop app's Code tab, which has no such line, it sits above the prompt instead, and appears once you send the first message of a session. Its design is claude-router's: signal bars lit up to the tier, the tier pill, the activity in orange, the model and effort, the reason (`↑ jump`, `↓ downgrade`, `= fits`, `… waiting to go up`), the decision model's evidence against the bar (`Laya 91% ≥ 82%`), your 5-hour and weekly plan usage, context fill and cache hit. Parts drop from the right as the terminal narrows; the tier and model never do.
+- **The band**, on the line under the prompt, below the permission mode (`auto mode on`). In the desktop app's Code tab, which has no such line, it sits above the prompt instead, and appears once you send the first message of a session. Its design is claude-router's: signal bars lit up to the tier, the tier pill, the activity in orange, the model and effort, a green `✓` once the API reports that model answered, the reason (`↑ jump`, `↓ downgrade`, `= fits`, `… waiting to go up`), the decision model's evidence against the bar (`Laya 91% ≥ 82%`), your 5-hour and weekly plan usage, context fill and cache hit. Parts drop from the right as the terminal narrows; the tier and model never do.
 - **The quick menu**: `/router`, or **Router** at the end of the band. A numbered question in Claude Code's own dialog, answered from the keyboard: switch between route and watch, pin the next turn (a second step asks which model), turn routing off or on, or open the details. Esc closes it without changing anything.
-- **Faults lead the band**, in yellow, with where they happened: `⚠ Laya: timed out after 8 s at 10.0.0.9:8888 · keeping model`.
+- **Faults lead the band**, in yellow, with where they happened: `⚠ Laya: timed out after 8 s at 10.0.0.9:8888 · keeping model`. So does a reply from a model other than the one the router asked for, which Claude Code can do on its own (falling back when a model is overloaded): `⚠ answered by Opus 5.5`.
+- **What answered.** Each reply carries the model the API says answered it. In route mode the band confirms it, the pane's Now tab shows it under **Answered by**, and the log keeps it with each decision; `/router log` and the Log tab add `ran <model>` where it differs from the pick. In watch mode the session's own model runs, so the log records that and the band shows no check.
 - **The pane** (`/router pane`, or Details in the menu), with Now, Log and Tune tabs. Every control is there too, including **Session row**, which adds a second band line with turns per tier and switches.
 
 ![The pane](pane.png)
@@ -61,7 +62,7 @@ Requires Claude Code 2.1.299 or later (per-request model changes, and the `weigh
 
 To work on the code instead, load the folder directly: `claude --plugin-dir ~/claude-decision-router/plugin`. Claude Code then hot-reloads your edits and writes the mods API types into `.claude-plugin/types/` for your editor. Keys still come from the plugin's settings; `ROUTER_BACKEND`, `ROUTER_LOCAL_URL` and `ROUTER_DECISION_MODEL` in your shell override the backend, address and model name while you develop.
 
-**The desktop app.** The Code tab runs Claude Code itself, so the plugin works there as it does in the terminal: install it from Customize > Plugins (Add marketplace with `frankievalentine/claude-decision-router`, then Add plugin), and change its settings on the same screen. The band sits above the prompt and appears after the first message of a session; `/router` and its menu, toasts and the pane all work.
+**The desktop app.** The Code tab runs Claude Code itself, so the plugin works there as it does in the terminal: install it from Customize > Plugins (Add marketplace with `frankievalentine/claude-decision-router`, then Add plugin), and change its settings on the same screen. The band sits above the prompt and appears after the first message of a session, since the app starts Claude Code for a session only then. The app's prompt does not run commands a plugin adds, so `/router` and its subcommands answer that they are not available there: use **Router** at the end of the band for the quick menu and the pane, and the plugin's settings for the decision model and keys. The model picker under the prompt keeps showing the session's own model, which the router leaves alone; the band's `✓` is the confirmation that the routed model answered.
 
 ## Backends
 
@@ -128,15 +129,15 @@ Set **Decision model** to Unsloth or SGLang server, **Server address** to `http:
 | Setting | What it does |
 |---|---|
 | Mode | Watch only (show the pick, change nothing), Switch models, or Off. `/router` changes it too |
-| What matters more | Save usage, Balanced or Best answers: how readily the router reaches for a stronger model |
-| Use Fable for the hardest tasks | Lets very hard, non-security tasks run on Fable 5.1, which may bill to usage credits |
+| Priority | Save usage, Balanced or Best answers: how readily the router reaches for a stronger model |
+| Use Fable | Lets very hard, non-security tasks run on Fable 5.1, which may bill to usage credits |
 | Decision model | Where the decision model runs (see Backends) |
 | Server address, Server key | For llama.cpp, Unsloth or SGLang |
 | Cloudflare account ID, Cloudflare API token | For Cloudflare Workers AI |
 | TypeSafe API key | For TypeSafe |
 | Model name (advanced) | The model to ask; empty uses each backend's default (`clef-flash`, `jev-latest`, Unsloth's selected model, or none for a single-model llama-server) |
-| Confidence needed to switch (advanced) | Below this confidence in the tier the decision model points to (0 spread evenly over the tiers, 1 certain, computed the same way for every backend), the current model is kept. Default 0.45 |
-| Wait time in milliseconds (advanced) | How long to wait for the decision model; 0 means 2500 for hosted backends and 8000 for local ones |
+| Confidence to switch (advanced) | Below this confidence in the tier the decision model points to (0 spread evenly over the tiers, 1 certain, computed the same way for every backend), the current model is kept. Default 0.45 |
+| Wait time, ms (advanced) | How long to wait for the decision model; 0 means 2500 for hosted backends and 8000 for local ones |
 
 ## Commands
 

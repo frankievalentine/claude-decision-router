@@ -5,7 +5,7 @@
 import { backendOf, buildBody, endpointFor, hostOf, parseAnswers, warmupBody } from '../src/classifier.ts';
 import type { Endpoint } from '../src/classifier.ts';
 import { tierConfidence, tierDistribution } from '../src/features.ts';
-import { append, markEscalated, markOverride, recordOf, tune } from '../src/journal.ts';
+import { append, markAnswered, markEscalated, markOverride, recordOf, tune } from '../src/journal.ts';
 import type { JournalRecord } from '../src/journal.ts';
 import { decide, escalate, initialState, POLICY } from '../src/policy.ts';
 import { ownConfig, resolveOptions, savedChoices, settingLabel, upgradeSettings } from '../src/settings.ts';
@@ -117,6 +117,10 @@ let advisorModel: string | null = null;
 let advisorSeen: Tier | null = null;
 // The turn in which the advisor was last consulted: its guidance stands in for an escalation.
 let advisedTurn: string | null = null;
+// What the API reported answering this turn's latest reply, beside what the request asked for: the band's proof that
+// the routed model ran. `answerTurn` is the turn the newest log record belongs to, the only one the answer marks.
+let answered: { model: string; asked: string } | null = null;
+let answerTurn: string | null = null;
 
 export function register(on: any, opts: Options) {
   options = resolveOptions(opts ?? {});
@@ -196,14 +200,17 @@ export function register(on: any, opts: Options) {
       if (routed && advised(result)) routed.advised = true;
       return result;
     }
+    if (e.index === 0) answered = null;
     if (mode === 'off' || paused) return yield* next(e);
     if (e.index === 0) {
       await readAdvisor($);
       const before = current?.route ?? null;
       const job = jobs.get(e.turnId);
       jobs.delete(e.turnId);
+      const newest = journal[journal.length - 1];
       if (pin) await pinTurn($, pin);
       else if (job) await decideTurn($, await job);
+      if (journal[journal.length - 1] !== newest) answerTurn = e.turnId;
       choosing = false;
       $.ui.invalidate('ui.render');
       const after = current?.route ?? null;
@@ -231,6 +238,7 @@ export function register(on: any, opts: Options) {
     const result = yield* next(request);
     readCache(result?.usage);
     if (advised(result)) noteAdvisor($, e.turnId, result.usage?.model ?? request.model);
+    if (typeof result?.usage?.model === 'string' && result.usage.model) await noteAnswer($, e.turnId, result.usage.model, request.model);
     return result;
   });
 
@@ -949,6 +957,17 @@ function noteAdvisor($: any, turnId: string, model: string) {
   }
 }
 
+// A reply and the model the API says answered it. The turn's log record keeps the latest, saved only when it changes.
+async function noteAnswer($: any, turnId: string, model: string, asked: string) {
+  answered = { model, asked };
+  $.ui.invalidate('ui.render');
+  if (answerTurn !== turnId) return;
+  const marked = markAnswered(journal, model);
+  if (marked === journal) return;
+  journal = marked;
+  await $.store.set(JOURNAL_KEY, journal);
+}
+
 async function routeOf($: any, tier: Tier, f: Features | null): Promise<Route | null> {
   let available: string[] | undefined;
   try {
@@ -1044,6 +1063,7 @@ function snapshot(): Snapshot {
     fable: options.allow_fable === true,
     detail,
     advisor: cap ? { name: advisorText(), cap } : null,
+    answered,
   };
 }
 
@@ -1077,7 +1097,7 @@ function statusText(): string {
   const usage = usageText(s.windows);
   return [
     `${bandText(s)}${usage ? ` · ${usage}` : ''}`,
-    `Mode: ${mode}${paused ? ' (paused for this session)' : ''}. Decision model: ${s.label} (${backendOf(overrides.backend ?? options.backend)}). Preference: ${s.preference}. Fable: ${s.fable ? 'allowed' : 'off'}.`,
+    `Mode: ${mode}${paused ? ' (paused for this session)' : ''}. Decision model: ${s.label} (${backendOf(overrides.backend ?? options.backend)}). Priority: ${settingLabel('preference', s.preference)}. Fable: ${s.fable ? 'allowed' : 'off'}.`,
     s.advisor
       ? `Advisor: ${s.advisor.name}. Routing stays at ${s.advisor.cap} or below, where the advisor still applies.`
       : advisorModel
@@ -1098,7 +1118,8 @@ function logText(records: JournalRecord[], n: number): string {
       const when = new Date(r.at).toISOString().slice(5, 16).replace('T', ' ');
       const what = r.error ? `error: ${r.error}` : `${r.activity ?? '-'} d${r.difficulty ?? '-'} c${r.confidence ?? '-'}`;
       const lean = r.lean && r.lean !== r.tier ? `  leaned ${r.lean}` : '';
-      return `${when}  ${r.mode.padEnd(5)} ${r.tier.padEnd(6)} ${r.reason.padEnd(14)} ${what}${lean}${r.outcome === 'ok' ? '' : `  [${r.outcome}]`}`;
+      const ran = r.answered && tierOfModel(r.answered) !== r.tier ? `  ran ${modelName(r.answered)}` : '';
+      return `${when}  ${r.mode.padEnd(5)} ${r.tier.padEnd(6)} ${r.reason.padEnd(14)} ${what}${lean}${ran}${r.outcome === 'ok' ? '' : `  [${r.outcome}]`}`;
     })
     .join('\n');
 }
