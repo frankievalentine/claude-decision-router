@@ -1162,6 +1162,11 @@ async function subStep($: any, agentId: string, effort = 'medium') {
   let s = await stream.next()
   while (s.done !== true) s = await stream.next()
 }
+// The model a subagent's first request goes out on. The spawn itself is never changed: each request carries the pick.
+async function ranOn($: any, seen: any, agentId: string) {
+  await subStep($, agentId)
+  return seen.models[seen.models.length - 1]
+}
 
 test('on: an easy general subagent starts on the pick, with its prompt untouched', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'watch', level: 0 })
@@ -1170,10 +1175,10 @@ test('on: an easy general subagent starts on the pick, with its prompt untouched
   const text = await routing($)
   expect(text.text).toMatch(/Subagent routing is on/)
   expect(seen.store.get('decision-router:subagent-mode')).toBe('on')
-  const result = await spawn($, 'general-purpose', 'rename a variable', onSonnet)
-  expect(started[0].model).toBe('claude-haiku-5-5')
+  await spawn($, 'general-purpose', 'rename a variable', onSonnet)
+  expect(started[0].model).toBeUndefined()
   expect(started[0].prompt).toBe('rename a variable')
-  expect(result.model).toBe('claude-haiku-5-5')
+  expect(await ranOn($, seen, 'agent-1')).toBe('claude-haiku-5-5')
   const [r] = spawnLog(seen)
   expect(r.routed).toBe(true)
   expect(r.usual).toBe('sonnet')
@@ -1189,7 +1194,7 @@ test('on: Explore goes to Haiku at once, without asking', KEYS, async ($, on) =>
   await start($)
   await routing($)
   await spawn($, 'Explore', 'find it', onSonnet)
-  expect(started[0].model).toBe('claude-haiku-5-5')
+  expect(await ranOn($, seen, 'agent-1')).toBe('claude-haiku-5-5')
   expect(seen.bodies.length).toBe(0)
 })
 
@@ -1199,9 +1204,9 @@ test('on: a hard task stays at the model it would have used, and never goes abov
   await start($)
   await routing($)
   await spawn($, 'general-purpose', 'redesign the scheduler', onSonnet)
-  expect(started[0].model).toBe('claude-sonnet-5-5')
+  expect(await ranOn($, seen, 'agent-1')).toBe('claude-sonnet-5-5')
   await spawn($, 'general-purpose', 'redesign the scheduler', { parentModel: 'claude-opus-5-5' })
-  expect(started[1].model).toBe('claude-opus-5-5')
+  expect(await ranOn($, seen, 'agent-2')).toBe('claude-opus-5-5')
   expect(spawnLog(seen).map((r) => r.pick)).toEqual(['sonnet', 'opus'])
 })
 
@@ -1211,7 +1216,7 @@ test('on: security-sensitive work keeps its Sonnet floor', KEYS, async ($, on) =
   await start($)
   await routing($)
   await spawn($, 'general-purpose', 'rotate the signing key', onSonnet)
-  expect(started[0].model).toBe('claude-sonnet-5-5')
+  expect(await ranOn($, seen, 'agent-1')).toBe('claude-sonnet-5-5')
   expect(seen.bodies.length).toBe(1)
 })
 
@@ -1247,7 +1252,7 @@ test('on: a session that forces one subagent model is left alone, and a default 
   await start($)
   await routing($)
   await spawn($, 'general-purpose', 'hard', { parentModel: 'claude-opus-5-5' })
-  expect(started[0].model).toBe('claude-haiku-5-5')
+  expect(await ranOn($, seen, 'agent-1')).toBe('claude-haiku-5-5')
   expect(seen.bodies.length).toBe(1)
 })
 
@@ -1307,7 +1312,7 @@ test('on: a burst is asked about one at a time and every subagent starts', KEYS,
   await routing($)
   await Promise.all(Array.from({ length: 5 }, (_, i) => spawn($, 'general-purpose', `task ${i}`, onSonnet)))
   expect(started.length).toBe(5)
-  expect(started.every((e) => e.model === 'claude-haiku-5-5')).toBe(true)
+  for (let i = 1; i <= 5; i += 1) expect(await ranOn($, seen, `agent-${i}`)).toBe('claude-haiku-5-5')
   expect(most).toBe(1)
   expect(seen.bodies.length).toBe(5)
 })

@@ -44,6 +44,27 @@ The model picker keeps showing the model you chose for the session, since the ro
 
 See the [privacy notice](https://github.com/frankievalentine/claude-decision-router/blob/main/PRIVACY.md) for details.
 
+**The only hosts it contacts** are the decision model you choose: `api.cloudflare.com` (Workers AI, under your own account), `api.typesafe.ai`, or the address of your own server (by default `127.0.0.1:9931` for llama.cpp and `127.0.0.1:8888` for Unsloth). It downloads nothing and runs no commands or programs.
+
+## What it does inside Claude Code
+
+Decision Router is a hooks module: code that Claude Code runs at set points. Here is each point it uses, and what it changes there.
+
+- **Each model request** (`turn.step`). In **Switch models** mode, it sets the request's model and effort to the router's pick; in **Watch only** it changes nothing. With subagent routing on, it does the same for each request of a general or Explore subagent. It reads the model the reply came from, the share of the prompt cache reused, and whether the advisor was consulted.
+- **Each prompt you send** (`turn.start`). It sends the prompt to the decision model, as described above. The prompt itself goes on to Claude unchanged.
+- **Tool calls** (`tool.call`). It counts failed calls, so repeated errors can move the turn up a model. Every call goes on unchanged.
+- **Subagents starting** (`agent.spawn`). Every subagent starts exactly as Claude asked. With subagent routing on, the router reads the subagent's task to pick its model, which it then sets on the subagent's requests.
+- **`/model` and `/advisor`** (`command.run`). Both run unchanged. Picking a model with `/model` pauses routing for the session; after `/advisor` the router reads the new advisor setting.
+- **Reading settings** (`settings.read`). Choices saved by versions before 0.12 are shown under their new labels, so they keep working. The settings file itself is not changed.
+- **Drawing** (`ui.render`). It adds the status line by the prompt, the words "Choosing model" on the spinner while the decision model answers, and the Status and settings panel. Everything Claude Code draws itself is left as it is.
+- **The `/router` command**, which it adds.
+
+**Settings it changes:** only its own, and only when you ask. `/router setup` saves the decision model, server address and Cloudflare account ID you choose, and the Fable switch in Status and settings saves **Use Fable**. It never changes Claude Code's own settings, permission mode or Remote Control, and sets no environment variables.
+
+**Environment variables it reads:** `CLAUDE_CODE_SUBAGENT_MODEL` and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`, so subagent routing respects a model you set for subagents, and `CLAUDE_CODE_DISABLE_ADVISOR_TOOL`, so an advisor you turned off is not counted. Nothing else, and no keys.
+
+**What it keeps:** your mode, panel choices and a decision log of labels and numbers, in Claude Code's plugin storage on your computer.
+
 ## Learn more
 
 The [reference](docs/REFERENCE.md) covers every setting, each decision-model option in detail, the switching rules, and how the code is laid out.

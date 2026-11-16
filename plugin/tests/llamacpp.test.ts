@@ -3,6 +3,9 @@
 import { expect, mock, test } from 'claude-code/testing'
 import { endpointFor, llamaBase } from '../src/classifier.ts'
 
+// The settings every hook test runs with: llama.cpp at a server on the network.
+const LLAMA = { options: { backend: 'llama.cpp server', local_url: 'http://10.0.0.9:9931' } }
+
 test('llama-server addresses: a bare host and port is enough', async () => {
   expect(llamaBase('http://10.0.0.9:9931')).toBe('http://10.0.0.9:9931')
   expect(llamaBase('http://10.0.0.9:9931/')).toBe('http://10.0.0.9:9931')
@@ -44,7 +47,7 @@ type Server = { level?: number; reply?: () => { status: number; body: unknown } 
 function stubs(on: any, server: Server, extraEnv: Record<string, string> = {}) {
   const seen = { requests: [] as any[], models: [] as string[], store: new Map<string, unknown>([['decision-router:mode', 'route']]) }
   mock.clock(on)
-  mock.env(on, { ROUTER_BACKEND: 'llamacpp', ROUTER_LOCAL_URL: 'http://10.0.0.9:9931', ...extraEnv })
+  mock.env(on, extraEnv)
   on('store.get', ($: any, e: any) => ({ value: seen.store.get(e.key) }))
   on('store.set', ($: any, e: any) => {
     seen.store.set(e.key, e.value)
@@ -82,7 +85,7 @@ async function turn($: any, turnId: string, text: string) {
 const start = ($: any) => $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
 const asks = (seen: { requests: any[] }) => seen.requests.filter((r) => Object.keys(r.body?.questions ?? {}).length === 6)
 
-test('llama-server warms up, then gets one /v1/systemone request per turn', async ($, on) => {
+test('llama-server warms up, then gets one /v1/systemone request per turn', LLAMA, async ($, on) => {
   const seen = stubs(on, { level: 0 })
   await start($)
   await turn($, 't1', 'where is the config loaded?')
@@ -95,21 +98,21 @@ test('llama-server warms up, then gets one /v1/systemone request per turn', asyn
   expect(seen.models[0]).toBe('claude-haiku-5-5')
 })
 
-test('a very hard task from llama-server goes to Opus', async ($, on) => {
+test('a very hard task from llama-server goes to Opus', LLAMA, async ($, on) => {
   const seen = stubs(on, { level: 4 })
   await start($)
   await turn($, 't1', 'redesign the storage engine')
   expect(seen.models[0]).toBe('claude-opus-5-5')
 })
 
-test('a model name is sent when one is set', async ($, on) => {
-  const seen = stubs(on, { level: 1 }, { ROUTER_DECISION_MODEL: 'clef-flash' })
+test('a model name is sent when one is set', { options: { ...LLAMA.options, decision_model: 'clef-flash' } }, async ($, on) => {
+  const seen = stubs(on, { level: 1 })
   await start($)
   await turn($, 't1', 'list the files')
   expect(asks(seen)[0].body.model).toBe('clef-flash')
 })
 
-test("llama.cpp's own error text reaches the log", async ($, on) => {
+test("llama.cpp's own error text reaches the log", LLAMA, async ($, on) => {
   stubs(on, {
     reply: () => ({
       status: 400,
@@ -122,7 +125,7 @@ test("llama.cpp's own error text reaches the log", async ($, on) => {
   expect(log.text).toMatch(/HTTP 400 from 10\.0\.0\.9:9931: input \(2345 tokens\) is too large to process\. increase the physical batch size/)
 })
 
-test('a server that is not running a decision model says so', async ($, on) => {
+test('a server that is not running a decision model says so', LLAMA, async ($, on) => {
   const seen = stubs(on, { reply: () => ({ status: 501, body: { error: { message: 'not a decision model' } } }) })
   await start($)
   await turn($, 't1', 'list the files')
@@ -131,14 +134,14 @@ test('a server that is not running a decision model says so', async ($, on) => {
   expect(log.text).toMatch(/HTTP 501 from 10\.0\.0\.9:9931: llama-server is not running a decision model \(Laya, Clef\)/)
 })
 
-test('the local key reaches llama-server as a bearer token', async ($, on) => {
-  const seen = stubs(on, { level: 1 }, { CLAUDE_PLUGIN_OPTION_LOCAL_API_KEY: 'sk-local' })
+test('the local key reaches llama-server as a bearer token', { options: { ...LLAMA.options, local_api_key: 'sk-local' } }, async ($, on) => {
+  const seen = stubs(on, { level: 1 })
   await start($)
   await turn($, 't1', 'list the files')
   expect(seen.requests.every((r) => r.headers?.authorization === 'Bearer sk-local')).toBe(true)
 })
 
-test('the band names llama.cpp', async ($, on) => {
+test('the band names llama.cpp', LLAMA, async ($, on) => {
   stubs(on, { level: 3 })
   on('ui.render', () => ({ type: 'Text', props: {}, children: ['prompt'] }))
   await start($)
@@ -154,8 +157,8 @@ test('the band names llama.cpp', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: 'llama.cpp · 8 s deadline' })).toBeDefined()
 })
 
-test('a key set to none sends no key', async ($, on) => {
-  const seen = stubs(on, { level: 1 }, { CLAUDE_PLUGIN_OPTION_LOCAL_API_KEY: 'none' })
+test('a key set to none sends no key', { options: { ...LLAMA.options, local_api_key: 'none' } }, async ($, on) => {
+  const seen = stubs(on, { level: 1 })
   await start($)
   await turn($, 't1', 'list the files')
   expect(seen.requests.length > 0).toBe(true)

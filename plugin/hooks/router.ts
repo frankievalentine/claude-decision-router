@@ -98,9 +98,6 @@ let pausedUntil = 0;
 // A request still waiting for its server. $.http.fetch cannot be cancelled, so a timed-out request runs on; no new
 // one is sent until it settles, which keeps a slow server from receiving a backlog of requests nobody reads.
 let inFlight = false;
-// ROUTER_BACKEND, ROUTER_LOCAL_URL and ROUTER_DECISION_MODEL override the saved settings when set, read at session
-// start: handy with --plugin-dir, where no settings are saved.
-let overrides: { backend?: string; localUrl?: string; decisionModel?: string } = {};
 const jobs = new Map<string, Promise<Advice>>();
 // Subagents keep to themselves: their own log, their own line and their own failure count, so they cannot take a main
 // turn's request, push out the main log or pause main routing.
@@ -175,11 +172,6 @@ export function register(on: any, opts: Options) {
     current = null;
     lastError = null;
     sessionStart = Date.now();
-    overrides = {
-      backend: (await $.env.get('ROUTER_BACKEND')) || undefined,
-      localUrl: (await $.env.get('ROUTER_LOCAL_URL')) || undefined,
-      decisionModel: (await $.env.get('ROUTER_DECISION_MODEL')) || undefined,
-    };
     // A local server loads its model on the first request, which can take 10-20 seconds: start that now, in the
     // background, so the first prompt finds it ready.
     const endpoint = endpointOf();
@@ -263,12 +255,13 @@ export function register(on: any, opts: Options) {
     return result;
   });
 
-  // On: the pick is settled before the subagent starts, within a bounded wait, and sets its model. Watch: the subagent
-  // starts as asked, and the pick is worked out afterward for the log.
+  // On: the pick is settled before the subagent starts, within a bounded wait, and each of its model requests carries
+  // it (turn.step). The spawn itself goes on exactly as asked: the plugin directory holds a mod that changes it. Watch:
+  // the pick is worked out afterward for the log.
   on('agent.spawn', async ($: any, e: any, next: any) => {
     if (spawnMode === 'off' || mode === 'off' || paused) return next(e);
     const plan = spawnMode === 'on' ? await planSpawn($, e) : null;
-    const result = await next(plan?.route ? { ...e, model: plan.route.model } : e);
+    const result = await next(e);
     if (!result?.deny) await noteSpawn($, e, result, plan);
     return result;
   });
@@ -364,16 +357,20 @@ export function register(on: any, opts: Options) {
     return elements.Box({ flexDirection: 'column', children: [await next(e), renderBand(elements, snapshot(), actionsOf($), columns)] });
   });
 
-  // The desktop app draws no hint line, so there the band stays above the prompt. The pane is the same everywhere.
-  on('ui.render', { component: ['AbovePrompt', 'Pane'] }, async ($: any, e: any, next: any) => {
-    if (e.component === 'Pane' && e.requestId !== PANE) return next(e);
-    const elements = $.ui.resolve(e);
-    if (e.component === 'Pane') return renderPane(elements, snapshot(), paneTab, actionsOf($), e.props.bodyColumns, e.surface !== 'terminal');
+  // The desktop app draws no hint line, so there the band stays above the prompt.
+  on('ui.render', { component: 'AbovePrompt' }, async ($: any, e: any, next: any) => {
     if (e.surface === 'terminal' || e.props.hasSurvey) return next(e);
+    const elements = $.ui.resolve(e);
     return elements.Box({
       flexDirection: 'column',
       children: [await next(e), renderBand(elements, snapshot(), actionsOf($), e.props.bodyColumns ?? 120)],
     });
+  });
+
+  // The pane is the same everywhere but for its layout, which the surface picks.
+  on('ui.render', { component: 'Pane' }, async ($: any, e: any, next: any) => {
+    if (e.requestId !== PANE) return next(e);
+    return renderPane($.ui.resolve(e), snapshot(), paneTab, actionsOf($), e.props.bodyColumns, e.surface !== 'terminal');
   });
 }
 
@@ -545,7 +542,7 @@ async function testText($: any): Promise<string> {
   const endpoint = endpointOf(account);
   if ('error' in endpoint) return `The decision model is not set up: ${endpoint.error}. Run /router setup.`;
   const key = await secretFor($, endpoint);
-  if (endpoint.keyRequired && !key) return keyHelp(backendOf(overrides.backend ?? options.backend));
+  if (endpoint.keyRequired && !key) return keyHelp(backendOf(options.backend));
   const result = await runTest($, endpoint, key, endpoint.local ? SETUP_TIMEOUT_MS : Math.max(HOSTED_TIMEOUT_MS, 8000));
   return result.ok
     ? `${endpoint.label} answered in ${result.ms} ms at ${hostOf(endpoint.url)}.`
@@ -566,9 +563,7 @@ async function setup($: any): Promise<string> {
   const backend = backendOfAnswer(picked);
   if (!backend) return 'Setup cancelled: that was not one of the options.';
   try {
-    const saved = backend === 'llamacpp' || backend === 'local' ? await setupLocal($, backend) : await setupHosted($, backend);
-    const shell = overrides.backend && overrides.backend !== backend ? ' ROUTER_BACKEND is set in your shell and overrides this until you unset it.' : '';
-    return `${saved}${shell}`;
+    return backend === 'llamacpp' || backend === 'local' ? await setupLocal($, backend) : await setupHosted($, backend);
   } catch {
     return 'Setup cancelled.';
   }
@@ -604,7 +599,7 @@ async function setupLocal($: any, backend: 'llamacpp' | 'local'): Promise<string
 }
 
 async function setupHosted($: any, backend: Backend): Promise<string> {
-  const values: Record<string, string> = { backend: settingLabel('backend', backend) };
+  const values: Partial<Record<SavedField, string>> = { backend: settingLabel('backend', backend) };
   if (backend === 'clef-workers') {
     // An account ID already in settings is used as it is; only one typed here is saved.
     let account: string | null = options.cloudflare_account_id || null;
@@ -640,11 +635,11 @@ const nextStep = () => (mode === 'route' ? '' : 'Run /router route when the pick
 
 // Writes the plugin's own settings the way /config would. A refusal comes back as text. A session that draws no
 // /config rows for plugins has nothing to write to, so the person is told what to enter where.
-async function save($: any, values: Record<string, string>): Promise<string> {
-  for (const [field, value] of Object.entries(values)) {
+async function save($: any, values: Partial<Record<SavedField, string>>): Promise<string> {
+  for (const [field, value] of Object.entries(values) as [SavedField, string][]) {
     let result: any;
     try {
-      result = await $.config.set({ key: `decision-router.${field}`, value });
+      result = await saveOne($, field, value);
     } catch {
       const wanted = Object.entries(values).map(([k, v]) => `${k} = ${v}`).join(', ');
       return `Could not save the settings from here. Enter them in the plugin's settings (/plugin > decision-router > Configure options, or Customize > Plugins in the desktop app): ${wanted}.`;
@@ -652,6 +647,14 @@ async function save($: any, values: Record<string, string>): Promise<string> {
     if (result?.deny) return `Could not save ${field}: ${result.deny}`;
   }
   return `Saved: ${Object.entries(values).map(([k, v]) => `${k} = ${v}`).join(', ')}.`;
+}
+
+// The settings /router setup saves, each written with its key spelled out, as the plugin directory requires.
+type SavedField = 'backend' | 'local_url' | 'cloudflare_account_id';
+async function saveOne($: any, field: SavedField, value: string): Promise<any> {
+  if (field === 'backend') return $.config.set({ key: 'decision-router.backend', value: value });
+  if (field === 'local_url') return $.config.set({ key: 'decision-router.local_url', value: value });
+  return $.config.set({ key: 'decision-router.cloudflare_account_id', value: value });
 }
 
 // The configured endpoint and its key, or why they are not usable.
@@ -760,7 +763,8 @@ function activityOf(advice: Advice): string | null {
 async function noteSpawn($: any, e: any, result: any, plan: SpawnPlan | null) {
   try {
     const id = String(result?.agentId ?? e.tool_use_id);
-    const actual = tierOfModel(result?.model);
+    // A routed subagent runs on its pick, set on each of its requests; any other on the model it started with.
+    const actual = plan?.route && plan.pick && result?.agentId ? plan.pick : tierOfModel(result?.model);
     const blank = recordOfSpawn(id, Date.now(), plan?.kind ?? kindOf(e), actual);
     if (plan) {
       const { advice } = plan;
@@ -880,14 +884,11 @@ async function askSystemOne($: any, endpoint: Endpoint, key: string | null, prom
   return JSON.parse(response.text);
 }
 
-// Keys come only from the plugin's own settings. A sensitive option may not reach `options`, and Claude Code also hands
-// every option to the plugin as CLAUDE_PLUGIN_OPTION_<KEY>, so that is read too.
+// Keys come only from the plugin's own settings, which Claude Code hands to `register`.
 async function secretFor($: any, endpoint: Endpoint): Promise<string | null> {
-  if (endpoint.key === 'typesafe_api_key')
-    return pickKey(options.typesafe_api_key, await $.env.get('CLAUDE_PLUGIN_OPTION_TYPESAFE_API_KEY'));
-  if (endpoint.key === 'cloudflare_api_token')
-    return pickKey(options.cloudflare_api_token, await $.env.get('CLAUDE_PLUGIN_OPTION_CLOUDFLARE_API_TOKEN'));
-  return pickKey(options.local_api_key, await $.env.get('CLAUDE_PLUGIN_OPTION_LOCAL_API_KEY'));
+  if (endpoint.key === 'typesafe_api_key') return pickKey(options.typesafe_api_key);
+  if (endpoint.key === 'cloudflare_api_token') return pickKey(options.cloudflare_api_token);
+  return pickKey(options.local_api_key);
 }
 
 // Claude Code's key fields can be replaced but never emptied, so "none" (or "-", "off", "clear") in one means no key,
@@ -1033,10 +1034,10 @@ function advisorText(): string {
 
 function endpointOf(account?: string | null) {
   return endpointFor({
-    backend: backendOf(overrides.backend ?? options.backend),
+    backend: backendOf(options.backend),
     cloudflareAccountId: account ?? options.cloudflare_account_id,
-    localUrl: overrides.localUrl ?? options.local_url,
-    decisionModel: overrides.decisionModel ?? options.decision_model,
+    localUrl: options.local_url,
+    decisionModel: options.decision_model,
   });
 }
 
@@ -1125,7 +1126,7 @@ function statusText(): string {
   const usage = usageText(s.windows);
   return [
     `${bandText(s)}${usage ? ` · ${usage}` : ''}`,
-    `Mode: ${mode}${paused ? ' (paused for this session)' : ''}. Decision model: ${s.label} (${backendOf(overrides.backend ?? options.backend)}). Priority: ${settingLabel('preference', s.preference)}. Fable: ${s.fable ? 'allowed' : 'off'}.`,
+    `Mode: ${mode}${paused ? ' (paused for this session)' : ''}. Decision model: ${s.label} (${backendOf(options.backend)}). Priority: ${settingLabel('preference', s.preference)}. Fable: ${s.fable ? 'allowed' : 'off'}.`,
     s.advisor
       ? `Advisor: ${s.advisor.name}. Routing stays at ${s.advisor.cap} or below, where the advisor still applies.`
       : advisorModel
