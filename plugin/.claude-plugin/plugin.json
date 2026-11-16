@@ -1,8 +1,8 @@
 {
   "name": "decision-router",
   "displayName": "Decision Router",
-  "version": "0.12.5",
-  "description": "Picks the right Claude model for every message, so your plan lasts longer. Easy questions go to a faster model, hard problems to a stronger one, and you never have to switch models yourself.",
+  "version": "0.12.6",
+  "description": "Picks the right Claude model for every message, so your plan lasts longer. A small decision model, on your own computer or a hosted service, rates each task: easy ones go to a lighter model, hard ones to a stronger one.",
   "author": {
     "name": "frankievalentine",
     "url": "https://github.com/frankievalentine"
