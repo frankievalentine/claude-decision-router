@@ -51,6 +51,7 @@ const PANE = 'decision-router';
 const MODE_KEY = 'decision-router:mode';
 const JOURNAL_KEY = 'decision-router:journal';
 const DETAIL_KEY = 'decision-router:detail';
+const FABLE_KEY = 'decision-router:fable';
 const SPAWN_MODE_KEY = 'decision-router:subagent-mode';
 const SPAWN_LOG_KEY = 'decision-router:subagent-log';
 // A hosted decision model answers in well under a second; a model on your own machine or network gets longer.
@@ -76,6 +77,9 @@ let choosing = false;
 let pin: Tier | null = null;
 let paneTab: PaneTab = 'now';
 let detail = false;
+// The pane's Fable switch, beside the Use Fable setting it was flipped against. A session hosted by the desktop app
+// cannot save plugin settings, so the switch is kept here; once the setting is changed after it, the setting rules.
+let fableChoice: { allow: boolean; setting: boolean } | null = null;
 let policy: PolicyState = initialState();
 let journal: JournalRecord[] = [];
 let current: { decision: Decision; route: Route | null; features: Features | null } | null = null;
@@ -145,6 +149,12 @@ export function register(on: any, opts: Options) {
     await adoptSavedChoices($);
     mode = pick((await $.store.get(MODE_KEY)) ?? options.mode, ['watch', 'route', 'off'] as const, 'watch');
     detail = (await $.store.get(DETAIL_KEY)) === true;
+    const savedFable: any = await $.store.get(FABLE_KEY);
+    fableChoice = typeof savedFable?.allow === 'boolean' && typeof savedFable?.setting === 'boolean' ? savedFable : null;
+    if (fableChoice && fableChoice.setting !== (options.allow_fable === true)) {
+      fableChoice = null;
+      await $.store.set(FABLE_KEY, null);
+    }
     const saved = await $.store.get(JOURNAL_KEY);
     journal = Array.isArray(saved) ? saved : [];
     spawnMode = pick(await $.store.get(SPAWN_MODE_KEY), ['on', 'watch', 'off'] as const, 'off');
@@ -358,7 +368,7 @@ export function register(on: any, opts: Options) {
   on('ui.render', { component: ['AbovePrompt', 'Pane'] }, async ($: any, e: any, next: any) => {
     if (e.component === 'Pane' && e.requestId !== PANE) return next(e);
     const elements = $.ui.resolve(e);
-    if (e.component === 'Pane') return renderPane(elements, snapshot(), paneTab, actionsOf($), e.props.bodyColumns);
+    if (e.component === 'Pane') return renderPane(elements, snapshot(), paneTab, actionsOf($), e.props.bodyColumns, e.surface !== 'terminal');
     if (e.surface === 'terminal' || e.props.hasSurvey) return next(e);
     return elements.Box({
       flexDirection: 'column',
@@ -378,6 +388,7 @@ function actionsOf($: any): Actions {
     close: () => closePane($),
     tab: (tab) => showTab($, tab),
     toggleDetail: () => toggleDetail($),
+    setFable: (allow) => setFable($, allow),
     menu: () => openMenu($),
   };
 }
@@ -465,9 +476,26 @@ async function toggleDetail($: any) {
   $.ui.invalidate('ui.render');
 }
 
+// The pane's Fable switch. It is kept in the plugin's storage, and saved to the Use Fable setting too where the
+// session can save settings (the terminal); the desktop app's sessions cannot.
+async function setFable($: any, allow: boolean) {
+  fableChoice = { allow, setting: options.allow_fable === true };
+  await $.store.set(FABLE_KEY, fableChoice);
+  try {
+    await $.config.set({ key: 'decision-router.allow_fable', value: allow });
+  } catch {}
+  $.ui.invalidate('ui.render');
+}
+
+/** Whether Fable may be picked: the pane's switch, until the Use Fable setting changes after it; then the setting. */
+function fableAllowed(): boolean {
+  const setting = options.allow_fable === true;
+  return fableChoice && fableChoice.setting === setting ? fableChoice.allow : setting;
+}
+
 async function openPane($: any) {
   paneTab = 'now';
-  await $.ui.open({ id: PANE, title: 'Router', focus: true, closeOnEscape: true });
+  await $.ui.open({ id: PANE, title: 'Decision Router', focus: true, closeOnEscape: true });
 }
 
 async function closePane($: any) {
@@ -897,7 +925,7 @@ async function readUsage($: any): Promise<number | null> {
 async function decideTurn($: any, advice: Advice) {
   const contextTokens = await readUsage($);
   const preference = pick(options.preference, ['cost', 'balanced', 'quality'] as const, 'balanced') as Preference;
-  const allowFable = options.allow_fable === true;
+  const allowFable = fableAllowed();
   const distribution = advice.features ? tierDistribution(advice.features, { preference, allowFable }) : null;
   // The confidence that gates the pick is the one in the tier, so it is also the one the band, pane and log show.
   const f = advice.features && distribution ? { ...advice.features, confidence: tierConfidence(distribution) } : advice.features;
@@ -1060,7 +1088,7 @@ function snapshot(): Snapshot {
     latencyMs: lastLatency,
     nativeModel,
     preference: options.preference ?? 'balanced',
-    fable: options.allow_fable === true,
+    fable: fableAllowed(),
     detail,
     advisor: cap ? { name: advisorText(), cap } : null,
     answered,

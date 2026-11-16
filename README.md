@@ -54,7 +54,7 @@ The router is careful about switching. It won't flip on one answer, and it holds
 
 You stay in control: `/model` pauses the router, and `/router pin opus` sets the next turn's model.
 
-**The desktop app.** The plugin works in the Code tab of the Claude desktop app just as it does in the terminal. Install it from Customize > Plugins (Add marketplace `frankievalentine/claude-decision-router`, then Add plugin) and change its settings there. The band sits above the prompt and appears after the first message of a session. The desktop app doesn't run `/router` commands: use **Router** at the end of the band for the quick menu and the details, and the plugin's settings to choose the decision model. The model picker keeps showing your session's model; the band's check mark confirms the model that actually answered.
+**The desktop app.** The plugin works in the Code tab of the Claude desktop app just as it does in the terminal. Install it from Customize > Plugins (Add marketplace `frankievalentine/claude-decision-router`, then Add plugin) and change its settings there. The band sits above the prompt and appears after the first message of a session. The desktop app doesn't run `/router` commands: use **Router** at the end of the band for the quick menu and **Status and settings**, and the plugin's settings to choose the decision model. The model picker keeps showing your session's model; the band's check mark confirms the model that actually answered.
 
 **Privacy:** your prompt goes to the decision model, and with subagents on, so does each general subagent's task. With llama.cpp or Unsloth it stays on your server, and with Cloudflare or TypeSafe it goes to them. The router's own log never keeps prompt text. The [privacy notice](PRIVACY.md) has the details.
 
@@ -71,7 +71,7 @@ The router starts in **Watch only** mode: the band under the prompt shows what i
 | `/router` | Quick menu: switch route and watch, pin the next turn, turn off, details |
 | `/router setup` | Choose and test a decision model |
 | `/router test` | Try the configured decision model once |
-| `/router pane` | Details: the current pick, plan usage, the decision log and tuning |
+| `/router pane` | Status and settings: the current pick, plan usage, the decision log and tuning |
 | `/router route`, `watch`, `off` | Change the mode |
 | `/router pin opus` | Run the next turn on that model |
 | `/router subagents on` | Let the router set subagent models too (off by default) |
@@ -85,9 +85,9 @@ The band under the prompt, with the model the router picked and why:
 
 ![The band in the terminal, under the permission mode](plugin/docs/band.png)
 
-The details pane (`/router pane`): the current pick, plan usage, the decision log and tuning:
+**Status and settings** (`/router pane`): the current pick, plan usage, the decision log and tuning:
 
-![The details pane in the terminal](plugin/docs/pane.png)
+![Status and settings in the terminal](plugin/docs/pane.png)
 
 ### Claude desktop app
 

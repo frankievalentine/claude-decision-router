@@ -1,7 +1,7 @@
 {
   "name": "decision-router",
   "displayName": "Decision Router",
-  "version": "0.12.1",
+  "version": "0.12.2",
   "description": "Picks the right Claude model for every message, so your plan lasts longer. Easy questions go to a faster model, hard problems to a stronger one, and you never have to switch models yourself.",
   "author": {
     "name": "frankievalentine",
@@ -49,7 +49,7 @@
     "allow_fable": {
       "type": "boolean",
       "title": "Use Fable",
-      "description": "For the hardest tasks. May use extra usage credits.",
+      "description": "For the hardest tasks. May use extra usage credits. The switch in Status and settings changes this too; the latest change wins.",
       "default": false
     },
     "backend": {

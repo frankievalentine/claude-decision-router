@@ -23,10 +23,10 @@ A decision model (Cloudflare's Clef or TypeSafe's Jev) **describes** each task: 
 ![The band under the permission mode](band.png)
 
 - **The band**, on the line under the prompt, below the permission mode (`auto mode on`). In the desktop app's Code tab, which has no such line, it sits above the prompt instead, and appears once you send the first message of a session. Its design is claude-router's: signal bars lit up to the tier, the tier pill, the activity in orange, the model and effort, a green `✓` once the API reports that model answered, the reason (`↑ jump`, `↓ downgrade`, `= fits`, `… waiting to go up`), the decision model's evidence against the bar (`Laya 91% ≥ 82%`), your 5-hour and weekly plan usage, context fill and cache hit. Parts drop from the right as the terminal narrows; the tier and model never do.
-- **The quick menu**: `/router`, or **Router** at the end of the band. A numbered question in Claude Code's own dialog, answered from the keyboard: switch between route and watch, pin the next turn (a second step asks which model), turn routing off or on, or open the details. Esc closes it without changing anything.
+- **The quick menu**: `/router`, or **Router** at the end of the band. A numbered question in Claude Code's own dialog, answered from the keyboard: switch between route and watch, pin the next turn (a second step asks which model), turn routing off or on, or open **Status and settings**. Esc closes it without changing anything.
 - **Faults lead the band**, in yellow, with where they happened: `⚠ Laya: timed out after 8 s at 10.0.0.9:8888 · keeping model`. So does a reply from a model other than the one the router asked for, which Claude Code can do on its own (falling back when a model is overloaded): `⚠ answered by Opus 5.5`.
 - **What answered.** Each reply carries the model the API says answered it. In route mode the band confirms it, the pane's Now tab shows it under **Answered by**, and the log keeps it with each decision; `/router log` and the Log tab add `ran <model>` where it differs from the pick. In watch mode the session's own model runs, so the log records that and the band shows no check.
-- **The pane** (`/router pane`, or Details in the menu), with Now, Log and Tune tabs. Every control is there too, including **Session row**, which adds a second band line with turns per tier and switches.
+- **Status and settings**, the pane (`/router pane`, or Status and settings in the menu), with Now, Log and Tune tabs. Every control is there too, including **Session row**, which adds a second band line with turns per tier and switches. In the desktop app, VS Code and the mobile app it has a layout of its own: plain section headings, drawn bars, the close control at the top, and no plan usage or context fill, which the desktop app shows itself. A decision-model fault on the band has a **Status** button that opens it.
 
 ![The pane](pane.png)
 
@@ -130,7 +130,7 @@ Set **Decision model** to Unsloth or SGLang server, **Server address** to `http:
 |---|---|
 | Mode | Watch only (show the pick, change nothing), Switch models, or Off. `/router` changes it too |
 | Priority | Save usage, Balanced or Best answers: how readily the router reaches for a stronger model |
-| Use Fable | Lets very hard, non-security tasks run on Fable 5.1, which may bill to usage credits |
+| Use Fable | Lets very hard, non-security tasks run on Fable 5.1, which may bill to usage credits. The switch in Status and settings changes it too, and works in the desktop app, where a session cannot save plugin settings: the switch is kept in the plugin's storage, and the latest change, the switch or this setting, wins |
 | Decision model | Where the decision model runs (see Backends) |
 | Server address, Server key | For llama.cpp, Unsloth or SGLang |
 | Cloudflare account ID, Cloudflare API token | For Cloudflare Workers AI |

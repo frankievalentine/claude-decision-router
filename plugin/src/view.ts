@@ -3,14 +3,14 @@
 //
 // The look is claude-router's (MIT, Alexei Ledenev): signal bars lit up to the tier, a tier pill, the activity in
 // orange italic, the route, the reason with its arrow, the evidence against the bar, and readings, separated by dots.
-// Plan usage stands where claude-router shows dollars. Controls live in the quick menu (/router, or Router on the band)
+// Plan usage stands where claude-router shows dollars. Controls live in the quick menu (/router, or Router options on the band)
 // and the pane, not in a row revealed on hover.
 
 import { mostLikely } from './features.ts';
 import type { JournalRecord } from './journal.ts';
 import { tune } from './journal.ts';
 import { settingLabel } from './settings.ts';
-import { rank, sameModel, TIERS, tierOfModel } from './tiers.ts';
+import { rank, sameModel, TIER_NAMES, TIERS, tierOfModel } from './tiers.ts';
 import type { Activity, Decision, Features, Mode, Route, Tier } from './types.ts';
 
 export type Snapshot = {
@@ -53,13 +53,14 @@ export type Actions = {
   close: () => void;
   tab: (tab: PaneTab) => void;
   toggleDetail: () => void;
+  setFable: (allow: boolean) => void;
   /** The quick menu: mode, pin, details. */
   menu: () => void;
 };
 
 export type PaneTab = 'now' | 'log' | 'tune';
 type El = any;
-type Elements = { Box: (p: any) => El; Text: (p: any) => El; Button: (p: any) => El };
+type Elements = { Box: (p: any) => El; Text: (p: any) => El; Button: (p: any) => El; Svg?: (p: any) => El };
 
 // Hex, so every surface draws the same shades. Yellow stays out of the tiers: it marks a fault that needs action.
 export const TIER_COLOR: Record<Tier, string> = { haiku: '#5f9fe0', sonnet: '#d7af5f', opus: '#e0708a', fable: '#c792ea' };
@@ -74,8 +75,8 @@ const COLOR = {
 };
 const BARS = '▂▄▆█';
 const SEPARATOR = '  ·  ';
-// Space the band keeps for the trailing Router button.
-const ROUTER_BUTTON = 8;
+// Space the band keeps for the trailing Router options button.
+const ROUTER_BUTTON = 16;
 
 const ACTIVITY_VERB: Record<Activity, string> = {
   code: 'coding',
@@ -348,7 +349,7 @@ export function bandSegments(s: Snapshot, a: Actions): Segment[] {
   if (s.error && decision.reason === 'no-advice')
     return [
       segment(0, part(`⚠ ${s.label}: ${s.error}`, { color: COLOR.warn })),
-      segment(2, button({ key: 'band-fix', label: 'Details', onPress: a.open })),
+      segment(2, button({ key: 'band-fix', label: 'Status', onPress: a.open })),
       { ...main, priority: 1 },
       mismatch && { ...mismatch, priority: 1 },
       pin,
@@ -435,7 +436,7 @@ export function renderBand(el: Elements, s: Snapshot, a: Actions, columns = 120)
   const row = (parts: Part[]) => el.Box({ children: parts.map((p) => draw(el, p)) });
   const kept = fitSegments(bandSegments(s, a), Math.max(0, columns - ROUTER_BUTTON));
   const line = kept.flatMap((seg, i) => (i ? [part(SEPARATOR, { dimColor: true }), ...seg.parts] : seg.parts));
-  line.push(part('  '), button({ key: 'details', label: 'Router', plain: true, onPress: a.menu }));
+  line.push(part('  '), button({ key: 'details', label: 'Router options', plain: true, onPress: a.menu }));
   return el.Box({
     key: 'router-band',
     flexDirection: 'column',
@@ -464,7 +465,12 @@ const NARROW = 56;
 /** Below this many columns a Log entry takes two lines. */
 const LOG_WIDE = 90;
 
-export function renderPane(el: Elements, s: Snapshot, tab: PaneTab, a: Actions, columns = 60): El {
+/**
+ * The pane. `graphical` is for the surfaces that draw `Svg` (the desktop app, VS Code, mobile): they get a layout of
+ * their own; the terminal keeps the text one.
+ */
+export function renderPane(el: Elements, s: Snapshot, tab: PaneTab, a: Actions, columns = 60, graphical = false): El {
+  const Svg = graphical ? el.Svg : undefined;
   const narrow = columns < NARROW;
   const barWidth = Math.max(6, Math.min(BLOCK, columns - 30));
   const t = (children: string, style: Style = {}) => el.Text({ ...style, children });
@@ -473,7 +479,24 @@ export function renderPane(el: Elements, s: Snapshot, tab: PaneTab, a: Actions, 
   // A row of buttons, which cannot shrink: they wrap onto the next line instead of running past the pane.
   const wrapRow = (...children: (El | null | false)[]) =>
     el.Box({ flexDirection: 'row', flexWrap: 'wrap', children: children.filter(Boolean) });
-  const head = (text: string) => t(text, { weight: 'bold', color: COLOR.head });
+  // Section headings: the terminal's in capitals and color, the graphical surfaces' in plain bold sentence case.
+  const head = (text: string) =>
+    Svg ? t(text.charAt(0) + text.slice(1).toLowerCase(), { weight: 'bold' }) : t(text, { weight: 'bold', color: COLOR.head });
+  // A tier's share: on one padded line with block characters in the terminal; elsewhere the name and share above a
+  // drawn bar, since a proportional font cannot pad a column.
+  const shareRow = (x: Tier, share: number) => {
+    const name = t(Svg ? x : `  ${x.padEnd(8)}`, { weight: 'bold', color: TIER_COLOR[x] });
+    if (!Svg) return line(name, t(blocks(share, barWidth), { color: TIER_COLOR[x] }), t(`  ${pct(share, 100)}`, { tabular: true }));
+    const width = Math.max(160, Math.min(320, columns * 7));
+    return el.Box({
+      flexDirection: 'column',
+      gap: 'xs',
+      children: [
+        el.Box({ flexDirection: 'row', justifyContent: 'space-between', children: [name, t(pct(share, 100), { tabular: true })] }),
+        Svg({ source: barSvg(share, TIER_COLOR[x], width), alt: `${x} ${pct(share, 100)}`, width, height: 6 }),
+      ],
+    });
+  };
   const dim = (text: string) => t(text, { dimColor: true });
   const gap = () => t(' ');
   const on = s.mode !== 'off' && !s.paused;
@@ -482,29 +505,28 @@ export function renderPane(el: Elements, s: Snapshot, tab: PaneTab, a: Actions, 
   const status = s.error
     ? t(`${s.label}: ${s.error}`, { color: COLOR.warn })
     : t(`${s.label} ready${s.latencyMs !== null ? ` · ${s.latencyMs} ms` : ''}`, { color: 'green' });
+  const tabs = (['now', 'log', 'tune'] as const).map((id) =>
+    el.Button({
+      key: `tab-${id}`,
+      label: id === 'now' ? 'Now' : id === 'log' ? 'Log' : 'Tune',
+      variant: tab === id ? 'primary' : 'secondary',
+      onPress: () => a.tab(id),
+    }),
+  );
+  if (Svg) return panel(Svg);
 
   const header = [
     wrapRow(
       head('ROUTING'),
       gap(),
-      radio('mode-route', 'on', on && s.mode === 'route', () => (s.paused ? a.resume() : a.setMode('route'))),
+      radio('mode-route', 'Switch models', on && s.mode === 'route', () => (s.paused ? a.resume() : a.setMode('route'))),
       gap(),
-      radio('mode-watch', 'watch', on && s.mode === 'watch', () => a.setMode('watch')),
+      radio('mode-watch', 'Watch only', on && s.mode === 'watch', () => a.setMode('watch')),
       gap(),
-      radio('mode-off', 'off', !on, () => a.setMode('off')),
+      radio('mode-off', 'Off', !on, () => a.setMode('off')),
     ),
     status,
-    wrapRow(
-      ...(['now', 'log', 'tune'] as const).flatMap((id, i) => [
-        i ? gap() : null,
-        el.Button({
-          key: `tab-${id}`,
-          label: id === 'now' ? 'Now' : id === 'log' ? 'Log' : 'Tune',
-          variant: tab === id ? 'primary' : 'secondary',
-          onPress: () => a.tab(id),
-        }),
-      ]),
-    ),
+    wrapRow(...tabs.flatMap((b, i) => [i ? gap() : null, b])),
     t(' '),
   ];
   const body = tab === 'log' ? logTab() : tab === 'tune' ? tuneTab() : nowTab();
@@ -595,7 +617,7 @@ export function renderPane(el: Elements, s: Snapshot, tab: PaneTab, a: Actions, 
           ),
         );
     }
-    rows.push(field('Mode', t(`${s.mode}${s.paused ? ' (paused)' : ''} · ${preferenceText(s)} · Fable ${s.fable ? 'allowed' : 'off'}`)));
+    rows.push(field('Mode', t(`${MODE_LABEL[s.mode]}${s.paused ? ' (paused)' : ''} · ${preferenceText(s)} · Fable ${s.fable ? 'allowed' : 'off'}`)));
     if (s.advisor) rows.push(field('Advisor', t(`${s.advisor.name} · routes up to ${s.advisor.cap}`)));
     rows.push(
       buttons(
@@ -607,6 +629,13 @@ export function renderPane(el: Elements, s: Snapshot, tab: PaneTab, a: Actions, 
           onPress: a.toggleDetail,
         }),
         dim('  turns and switches'),
+      ),
+    );
+    rows.push(
+      buttons(
+        'Fable',
+        el.Button({ key: 'fable', label: s.fable ? 'Fable: allowed' : 'Fable: off', variant: s.fable ? 'primary' : 'secondary', onPress: () => a.setFable(!s.fable) }),
+        dim('  hardest tasks; may use extra credits'),
       ),
     );
     const dist = cur?.decision.distribution ?? null;
@@ -739,11 +768,7 @@ export function renderPane(el: Elements, s: Snapshot, tab: PaneTab, a: Actions, 
       const share = u.tierShare[x] ?? 0;
       if (share > 0)
         rows.push(
-          line(
-            t(`  ${x.padEnd(8)}`, { weight: 'bold', color: TIER_COLOR[x] }),
-            t(blocks(share, barWidth), { color: TIER_COLOR[x] }),
-            t(`  ${pct(share, 100)}`, { tabular: true }),
-          ),
+          shareRow(x, share),
         );
     }
     if (u.leaned) {
@@ -753,11 +778,7 @@ export function renderPane(el: Elements, s: Snapshot, tab: PaneTab, a: Actions, 
         const share = u.leanShare[x] ?? 0;
         if (share > 0)
           rows.push(
-            line(
-              t(`  ${x.padEnd(8)}`, { weight: 'bold', color: TIER_COLOR[x] }),
-              t(blocks(share, barWidth), { color: TIER_COLOR[x] }),
-              t(`  ${pct(share, 100)}`, { tabular: true }),
-            ),
+            shareRow(x, share),
           );
       }
     }
@@ -765,6 +786,303 @@ export function renderPane(el: Elements, s: Snapshot, tab: PaneTab, a: Actions, 
     rows.push(t(tuneAdvice(u.suggestion, u.decisions)));
     return rows;
   }
+
+  // The desktop app, VS Code and mobile: cards with real type sizes, drawn bars and tags, and no padded columns,
+  // which a proportional font cannot line up. Status leads, then what this turn ran on, the one-turn pin, the session
+  // and the settings. Plan usage and context fill are left out: the desktop app shows both itself.
+  function panel(Svg: (p: any) => El): El {
+    const width = Math.max(160, Math.min(320, columns * 7));
+    const column = (gap: string, ...children: (El | null | false)[]) =>
+      el.Box({ flexDirection: 'column', gap, children: children.filter(Boolean) });
+    const row = (...children: (El | null | false)[]) =>
+      el.Box({ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 'sm', children: children.filter(Boolean) });
+    const spread = (left: El, right: El | null) =>
+      el.Box({ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 'sm', children: [left, right].filter(Boolean) });
+    const caption = (text: string, style: Style = {}) => t(text, { size: 'caption', dimColor: true, ...style });
+    const card = (title: string, aside: El | null, ...children: (El | null | false)[]) =>
+      el.Box({
+        flexDirection: 'column',
+        gap: 'sm',
+        borderStyle: 'round',
+        borderDimColor: true,
+        padding: 'md',
+        children: [spread(t(title, { weight: 'semibold' }), aside), ...children.filter(Boolean)],
+      });
+    const tag = (tier: Tier) => t(` ${TIER_NAMES[tier]} `, { backgroundColor: TIER_COLOR[tier], color: COLOR.ink, weight: 'semibold' });
+    const dot = (color: string) => t('●', { color });
+    const stat = (value: string, name: string) => column('xs', t(value, { size: 'title', weight: 'semibold', tabular: true }), caption(name));
+    const body = tab === 'log' ? logCards() : tab === 'tune' ? tuneCards() : nowCards();
+    return column(
+      'md',
+      statusCard(),
+      tabBar(),
+      ...body,
+      el.Box({ flexDirection: 'row', justifyContent: 'flex-end', children: [el.Button({ key: 'close', label: 'Close', role: 'dismiss', onPress: a.close })] }),
+    );
+
+    // A tab bar, so the three read as views of one panel rather than as actions: plain labels on a divider, the open
+    // one in the accent color with a bar under it.
+    function tabBar(): El {
+      const names = { now: 'Overview', log: 'History', tune: 'Tuning' } as const;
+      return column(
+        'xs',
+        el.Box({
+          flexDirection: 'row',
+          gap: 'lg',
+          children: (['now', 'log', 'tune'] as const).map((id) => {
+            const open = tab === id;
+            const name = names[id];
+            return el.Box({
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: 'xs',
+              children: [
+                el.Button({
+                  key: `tab-${id}`,
+                  plain: true,
+                  label: name,
+                  onPress: () => a.tab(id),
+                  children: [t(name, open ? { weight: 'semibold', color: COLOR.accent } : { dimColor: true })],
+                }),
+                Svg({ source: ruleSvg(name.length * 8, open ? COLOR.accent : null, 2), alt: open ? `${name}, open` : name, width: name.length * 8, height: 2 }),
+              ],
+            });
+          }),
+        }),
+        Svg({ source: ruleSvg(width, '#8b93a7', 1, 0.3), alt: '', width, height: 1 }),
+      );
+    }
+
+    function statusCard(): El {
+      const what =
+        s.mode === 'off'
+          ? `Off: every message uses ${modelName(s.nativeModel)}`
+          : s.paused
+            ? 'Paused: you picked a model with /model'
+            : s.mode === 'route'
+              ? 'On: switching models for you'
+              : 'Watching: picks are shown, nothing changes';
+      return card(
+        'Status',
+        null,
+        row(dot(on && s.mode === 'route' ? 'green' : on ? COLOR.accent : COLOR.muted), t(what)),
+        row(
+          dot(s.error ? COLOR.warn : 'green'),
+          s.error ? t(`${s.label}: ${s.error}`, { color: COLOR.warn }) : t(`${s.label} ready`),
+          !s.error && s.latencyMs !== null ? caption(`${s.latencyMs} ms`) : null,
+        ),
+        row(
+          el.Button({ key: 'mode-route', label: 'Switch models', variant: on && s.mode === 'route' ? 'primary' : 'secondary', onPress: () => (s.paused ? a.resume() : a.setMode('route')) }),
+          el.Button({ key: 'mode-watch', label: 'Watch only', variant: on && s.mode === 'watch' ? 'primary' : 'secondary', onPress: () => a.setMode('watch') }),
+          el.Button({ key: 'mode-off', label: 'Off', variant: on ? 'secondary' : 'primary', onPress: () => a.setMode('off') }),
+        ),
+      );
+    }
+
+    function nowCards(): El[] {
+      const out: El[] = [];
+      const cur = s.current;
+      const answer = answerState(s);
+      if (!cur) out.push(card('This turn', null, caption(s.paused ? 'Paused: the model is picked by hand.' : 'Waiting for your first message.')));
+      else {
+        const { decision, route, features } = cur;
+        const verb = topActivity(features)[0]?.[0];
+        const support = typeof decision.bar === 'number' && typeof decision.mass === 'number';
+        const why = LONG_REASON[decision.reason] ?? decision.reason;
+        out.push(
+          card(
+            s.mode === 'watch' ? 'Would use' : 'This turn',
+            answer === 'confirmed' ? t('✓ Answered', { size: 'caption', color: 'green', weight: 'semibold' }) : null,
+            row(
+              tag(decision.tier),
+              t(route ? modelName(route.model) : modelName(s.nativeModel), { size: 'heading', weight: 'semibold' }),
+              route ? caption(`${route.effort.charAt(0).toUpperCase()}${route.effort.slice(1)} effort`) : null,
+            ),
+            t(`${why.charAt(0).toUpperCase()}${why.slice(1)}.`),
+            verb || support
+              ? caption(
+                  [
+                    verb ? `${ACTIVITY_VERB[verb].charAt(0).toUpperCase()}${ACTIVITY_VERB[verb].slice(1)}` : null,
+                    support ? `${s.label} ${pct(decision.mass, 100)} sure, needs ${pct(decision.bar, 100)}` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' · '),
+                )
+              : null,
+            answer === 'mismatch'
+              ? column(
+                  'xs',
+                  t(`⚠ Answered by ${modelName(s.answered?.model)}`, { color: COLOR.warn, weight: 'semibold' }),
+                  caption('Claude Code can change models itself, as when one is overloaded.'),
+                )
+              : null,
+          ),
+        );
+      }
+      const dist = cur?.decision.distribution ?? null;
+      if (on)
+        out.push(
+          card(
+            'Pin the next turn',
+            null,
+            caption('Runs your next message on this model, once.'),
+            row(
+              ...TIERS.filter((x) => x !== 'fable' || s.fable).map((x) => {
+                const p = dist?.[x];
+                const chosen = s.pin === x;
+                return el.Button({
+                  key: `pin-${x}`,
+                  label: `${chosen ? '✓ ' : ''}${TIER_NAMES[x]}${typeof p === 'number' ? ` · ${pct(p, 100)}` : ''}`,
+                  variant: chosen ? 'primary' : 'secondary',
+                  onPress: () => a.pin(chosen ? null : x),
+                });
+              }),
+            ),
+          ),
+        );
+      const sum = sessionSummary(s);
+      const since = sum.since ? new Date(sum.since).toTimeString().slice(0, 5) : null;
+      out.push(
+        card(
+          'This session',
+          since ? caption(`since ${since}`) : null,
+          sum.turns ? Svg({ source: stripSvg(sum.strip, width), alt: `${sum.turns} routed turns`, width, height: 10 }) : caption('No routed turns yet.'),
+          sum.turns
+            ? row(...TIERS.filter((x) => sum.counts[x]).flatMap((x) => [dot(TIER_COLOR[x]), caption(`${TIER_NAMES[x]} ${sum.counts[x]}`, { dimColor: false })]))
+            : null,
+          el.Box({
+            flexDirection: 'row',
+            gap: 'lg',
+            children: [
+              stat(String(sum.turns), sum.turns === 1 ? 'turn' : 'turns'),
+              stat(String(sum.switches), sum.switches === 1 ? 'switch' : 'switches'),
+              stat(s.cacheHit === null ? '–' : pct(s.cacheHit, 100), 'cache reuse'),
+            ],
+          }),
+          sum.corrections ? t(`${sum.corrections} corrected by you (/model or escalation)`, { color: COLOR.warn }) : null,
+        ),
+      );
+      out.push(
+        card(
+          'Settings',
+          null,
+          spread(t('Priority'), t(preferenceText(s), { weight: 'semibold' })),
+          spread(
+            column('xs', t('Fable for the hardest tasks'), caption('May use extra usage credits.')),
+            el.Button({ key: 'fable', label: s.fable ? 'On' : 'Off', variant: s.fable ? 'primary' : 'secondary', onPress: () => a.setFable(!s.fable) }),
+          ),
+          s.advisor ? spread(t('Advisor'), t(`${s.advisor.name}, routes up to ${TIER_NAMES[s.advisor.cap]}`, { weight: 'semibold' })) : null,
+          spread(
+            t('Session row on the band'),
+            el.Button({ key: 'band-detail', label: s.detail ? 'On' : 'Off', variant: s.detail ? 'primary' : 'secondary', onPress: a.toggleDetail }),
+          ),
+          caption("Priority and the decision model are changed in the plugin's settings."),
+        ),
+      );
+      return out;
+    }
+
+    function logCards(): El[] {
+      const records = s.journal.slice(-15).reverse();
+      if (!records.length) return [card('Recent decisions', null, caption('No decisions yet.'))];
+      return [
+        card(
+          'Recent decisions',
+          caption('newest first'),
+          ...records.map((r) => {
+            const when = new Date(r.at).toTimeString().slice(0, 5);
+            const detail = r.error
+              ? t(`Error: ${r.error}`, { size: 'caption', color: COLOR.warn })
+              : caption(
+                  [
+                    r.activity ? ACTIVITY_VERB[r.activity as Activity] ?? r.activity : null,
+                    r.difficulty !== null ? `difficulty ${r.difficulty}` : null,
+                    r.confidence !== null ? `confidence ${r.confidence}` : null,
+                    r.lean && r.lean !== r.tier ? `leaned ${TIER_NAMES[r.lean]}` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' · '),
+                );
+            const ran = r.answered && tierOfModel(r.answered) !== r.tier;
+            return column(
+              'xs',
+              row(
+                caption(when, { tabular: true }),
+                tag(r.tier),
+                t(LONG_REASON[r.reason] ? `${LONG_REASON[r.reason].charAt(0).toUpperCase()}${LONG_REASON[r.reason].slice(1)}` : r.reason),
+              ),
+              detail,
+              ran ? t(`Ran ${modelName(r.answered)}`, { size: 'caption', ...(r.mode === 'route' ? { color: COLOR.warn } : { dimColor: true }) }) : null,
+              r.outcome === 'ok' ? null : t(OUTCOME[r.outcome], { size: 'caption', color: COLOR.warn }),
+            );
+          }),
+        ),
+      ];
+    }
+
+    function tuneCards(): El[] {
+      const u = tune(s.journal);
+      const share = (x: Tier, value: number) =>
+        column('xs', spread(row(dot(TIER_COLOR[x]), t(TIER_NAMES[x])), t(pct(value, 100), { tabular: true })), Svg({ source: barSvg(value, TIER_COLOR[x], width), alt: `${TIER_NAMES[x]} ${pct(value, 100)}`, width, height: 6 }));
+      return [
+        card(
+          'Corrections',
+          caption(`${u.decisions} decision${u.decisions === 1 ? '' : 's'}`),
+          el.Box({
+            flexDirection: 'row',
+            gap: 'lg',
+            children: [stat(pct(u.upRate, 100), 'corrected up'), stat(pct(u.downRate, 100), 'corrected down'), stat(pct(u.errorRate, 100), 'errors')],
+          }),
+          caption(`${s.label} answers in ${u.latencyMedianMs ?? '–'} ms, the median.`),
+          t(tuneAdvice(u.suggestion, u.decisions)),
+        ),
+        card('Models picked', null, ...TIERS.filter((x) => (u.tierShare[x] ?? 0) > 0).map((x) => share(x, u.tierShare[x] ?? 0))),
+        u.leaned
+          ? card(
+              'Where the decision model leaned',
+              caption(`${u.leaned} decisions`),
+              caption('Before the confidence filter, the hold and the plan caps.'),
+              ...TIERS.filter((x) => (u.leanShare[x] ?? 0) > 0).map((x) => share(x, u.leanShare[x] ?? 0)),
+            )
+          : null,
+      ].filter(Boolean) as El[];
+    }
+  }
+}
+
+const OUTCOME: Record<string, string> = {
+  'override-up': 'You moved it to a stronger model',
+  'override-down': 'You moved it to a lighter model',
+  escalated: 'Moved up after tool errors',
+};
+
+const MODE_LABEL: Record<Mode, string> = { route: 'Switch models', watch: 'Watch only', off: 'Off' };
+
+// A rounded track with the filled part over it, in SVG for the graphical surfaces. The track is a translucent gray
+// that reads on a light or a dark background.
+function barSvg(fraction: number | null, color: string, width: number): string {
+  const fill = fraction === null ? 0 : Math.max(0, Math.min(1, fraction)) * width;
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="6" viewBox="0 0 ${width} 6">` +
+    `<rect width="${width}" height="6" rx="3" fill="#8b93a7" fill-opacity="0.25"/>` +
+    (fill > 0 ? `<rect width="${Math.max(6, fill).toFixed(1)}" height="6" rx="3" fill="${color}"/>` : '') +
+    '</svg>'
+  );
+}
+
+// A horizontal line: a tab's underline, or the divider under the tabs. No color draws nothing, keeping the space.
+function ruleSvg(width: number, color: string | null, height: number, opacity = 1): string {
+  const line = color ? `<rect width="${width}" height="${height}" rx="${height / 2}" fill="${color}" fill-opacity="${opacity}"/>` : '';
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${line}</svg>`;
+}
+
+// One slim block per routed turn in its tier's color, oldest first.
+function stripSvg(strip: Tier[], width: number): string {
+  const step = width / Math.max(strip.length, 12);
+  const cells = strip
+    .map((tier, i) => `<rect x="${(i * step).toFixed(1)}" width="${Math.max(1, step - 2).toFixed(1)}" height="10" rx="2" fill="${TIER_COLOR[tier]}"/>`)
+    .join('');
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="10" viewBox="0 0 ${width} 10">${cells}</svg>`;
 }
 
 export function tuneAdvice(suggestion: 'raise' | 'lower' | 'keep', decisions: number): string {
@@ -787,25 +1105,24 @@ export type MenuChoice =
 
 /** The first step, by state: what can change from here. */
 export function mainMenu(s: Snapshot): MenuStep {
-  const where = s.current ? ` (now ${s.current.decision.tier})` : '';
   if (s.mode === 'off' || s.paused)
     return {
       question: `Routing is ${s.paused ? 'paused' : 'off'}. Turn it on?`,
       options: [
         { label: 'Route: switch models', then: { kind: 'mode', mode: 'route' } },
         { label: 'Watch: show picks only', then: { kind: 'mode', mode: 'watch' } },
-        { label: 'Details', then: { kind: 'details' } },
+        { label: 'Status and settings', then: { kind: 'details' } },
       ],
     };
   return {
-    question: `Routing is ${s.mode === 'route' ? 'on' : 'watching'}${where}. What would you like to change?`,
+    question: `Routing is ${s.mode === 'route' ? 'on' : 'watching'}. What would you like to change?`,
     options: [
       s.mode === 'route'
         ? { label: 'Watch: show picks only', then: { kind: 'mode', mode: 'watch' } }
         : { label: 'Route: switch models', then: { kind: 'mode', mode: 'route' } },
       { label: s.pin ? `Pin next turn (now ${s.pin})` : 'Pin next turn', then: { kind: 'pin-menu' } },
       { label: 'Turn off', then: { kind: 'mode', mode: 'off' } },
-      { label: 'Details', then: { kind: 'details' } },
+      { label: 'Status and settings', then: { kind: 'details' } },
     ],
   };
 }

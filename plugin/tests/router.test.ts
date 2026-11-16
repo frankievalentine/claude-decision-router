@@ -166,7 +166,7 @@ const PANE = {
   requestId: 'decision-router',
   surface: 'terminal',
   viewport: VIEWPORT,
-  props: { title: 'Router', isFocused: true, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} },
+  props: { title: 'Decision Router', isFocused: true, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} },
 } as const
 // What Claude Code would draw at the site when the mod passes it on.
 const engineDraws = (on: any) => on('ui.render', () => ({ type: 'Text', props: {}, children: ['prompt'] }))
@@ -388,13 +388,13 @@ test('no new request goes out while the last one is still running', KEYS, async 
 
 // --- The command ---
 
-test('bare /router opens the quick menu; Details opens the pane; unknown words get help', KEYS, async ($, on) => {
+test('bare /router opens the quick menu; Status and settings opens the pane; unknown words get help', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'watch' })
-  seen.answers.push('Details')
+  seen.answers.push('Status and settings')
   await start($)
   const bare = await $.command.run({ command: 'router', args: '' })
   expect(bare).toEqual({})
-  expect(seen.asked[0].options).toEqual(['Route: switch models', 'Pin next turn', 'Turn off', 'Details'])
+  expect(seen.asked[0].options).toEqual(['Route: switch models', 'Pin next turn', 'Turn off', 'Status and settings'])
   expect(seen.opened.length).toBe(1)
   await $.command.run({ command: 'router', args: 'pane' })
   expect(seen.opened.length).toBe(2)
@@ -437,7 +437,7 @@ test('the quick menu pins the next turn, switches modes, and turns routing back 
   // Pin: two steps, the tier on the second.
   seen.answers.push('Pin next turn', 'opus')
   await $.command.run({ command: 'router', args: '' })
-  expect(seen.asked[0].question).toBe('Routing is on (now haiku). What would you like to change?')
+  expect(seen.asked[0].question).toBe('Routing is on. What would you like to change?')
   expect(seen.asked[1].options).toEqual(['haiku', 'sonnet', 'opus'])
   const ui = await $.ui.mount(HINT)
   expect(await ui.find({ type: 'Text', text: '⏵ next turn: ' })).toBeDefined()
@@ -452,7 +452,7 @@ test('the quick menu pins the next turn, switches modes, and turns routing back 
   expect(await ui.find({ type: 'Text', text: 'off' })).toBeDefined()
   seen.answers.push('Watch: show picks only')
   await $.command.run({ command: 'router', args: '' })
-  expect(seen.asked[5].options).toEqual(['Route: switch models', 'Watch: show picks only', 'Details'])
+  expect(seen.asked[5].options).toEqual(['Route: switch models', 'Watch: show picks only', 'Status and settings'])
   expect(seen.store.get('decision-router:mode')).toBe('watch')
   // Router on the band opens the same menu.
   seen.answers.push('Route: switch models')
@@ -1383,4 +1383,74 @@ test('on: turning it off stops rewriting a running subagent\'s requests', KEYS, 
   await $.command.run({ command: 'router', args: 'subagents off' })
   await subStep($, agentId)
   expect(seen.models).toEqual(['claude-sonnet-5-5'])
+})
+
+test('the desktop pane draws its own layout: status first, cards, drawn bars, no plan usage', KEYS, async ($, on) => {
+  stubs(on, { mode: 'route', level: 3 })
+  await start($)
+  await turn($, 't1', 'track down the memory leak')
+  await turn($, 't2', 'and the one in the worker')
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const texts = (await ui.findAll({ type: 'Text' })).map((x: any) => x.text)
+  // Status leads, in a card of its own, with what the router is doing and the decision model's health.
+  expect(texts.indexOf('Status')).toBeLessThan(texts.indexOf('This turn'))
+  expect(await ui.find({ type: 'Text', text: 'On: switching models for you' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Clef Flash ready' })).toBeDefined()
+  expect((await ui.find({ key: 'mode-route' }))?.props.variant).toBe('primary')
+  // The turn: a tier tag, the model as a heading, and the API's confirmation.
+  expect((await ui.find({ type: 'Text', text: ' Opus ' }))?.props.backgroundColor).toBe('#e0708a')
+  expect((await ui.find({ type: 'Text', text: 'Opus 5.5' }))?.props.size).toBe('heading')
+  expect((await ui.find({ type: 'Text', text: '✓ Answered' }))?.props.color).toBe('green')
+  // Pins name the models in capitals.
+  expect((await ui.find({ key: 'pin-opus' }))?.props.label).toBe('Opus · 100%')
+  await ui.press({ key: 'pin-haiku' })
+  expect((await ui.find({ key: 'pin-haiku' }))?.props.label).toBe('✓ Haiku · 0%')
+  // The session as figures, and the strip drawn, not made of block characters.
+  expect(await ui.find({ type: 'Text', text: 'cache reuse' })).toBeDefined()
+  expect(await ui.find({ type: 'Svg' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /█/ })).toBeUndefined()
+  // The desktop app shows plan usage and context itself.
+  expect(await ui.find({ type: 'Text', text: /5-hour|Weekly|PLAN|Context/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: 'Balanced (default)' })).toBeDefined()
+  // The tabs read as a tab bar: the open one in the accent color, the others dim.
+  expect((await ui.find({ type: 'Text', text: 'Overview' }))?.props.color).toBe('#7c9cff')
+  expect((await ui.find({ type: 'Text', text: 'History' }))?.props.dimColor).toBe(true)
+  await ui.press({ key: 'tab-log' })
+  expect(await ui.find({ type: 'Text', text: 'Recent decisions' })).toBeDefined()
+  expect((await ui.find({ type: 'Text', text: 'History' }))?.props.color).toBe('#7c9cff')
+  await ui.press({ key: 'tab-tune' })
+  expect(await ui.find({ type: 'Text', text: 'Models picked' })).toBeDefined()
+  expect(await ui.find({ type: 'Svg' })).toBeDefined()
+  // The terminal keeps its own layout.
+  await ui.unmount()
+  const terminal = await $.ui.mount(PANE)
+  expect(await terminal.find({ type: 'Text', text: 'ROUTING' })).toBeDefined()
+  expect(await terminal.find({ type: 'Svg' })).toBeUndefined()
+})
+
+test('the pane switches Fable on, and a later change to the setting takes over again', KEYS, async ($, on) => {
+  const seen = stubs(on, { mode: 'route', level: 2 })
+  await start($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await ui.find({ key: 'fable' }))?.props.label).toBe('Off')
+  expect(await ui.find({ key: 'pin-fable' })).toBeUndefined()
+  await ui.press({ key: 'fable' })
+  expect((await ui.find({ key: 'fable' }))?.props.label).toBe('On')
+  expect(await ui.find({ key: 'pin-fable' })).toBeDefined()
+  // Kept in the plugin's storage against the setting it was flipped from, and saved to the setting where it can be.
+  expect(seen.store.get('decision-router:fable')).toEqual({ allow: true, setting: false })
+  expect(seen.config).toContainEqual({ key: 'decision-router.allow_fable', value: true })
+  const status = await $.command.run({ command: 'router', args: 'status' })
+  expect(status.text).toContain('Fable: allowed.')
+})
+
+test('a Fable switch made against an older setting gives way to the setting', KEYS, async ($, on) => {
+  const seen = stubs(on, { mode: 'route', level: 2 })
+  // Switched on in the pane while the setting allowed Fable. The setting now reads off, so it changed after the
+  // switch, and it rules.
+  seen.store.set('decision-router:fable', { allow: true, setting: true })
+  await start($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await ui.find({ key: 'fable' }))?.props.label).toBe('Off')
+  expect(seen.store.get('decision-router:fable')).toBeNull()
 })

@@ -23,13 +23,13 @@ It's careful about switching. It won't change models on a single message, it sta
 3. Use it as usual. It starts in **Watch only** mode: it shows what it would pick and changes nothing.
 4. When the picks look right, run `/router route` to let it switch models for you.
 
-Type `/router` at any time for a quick menu: switch modes, choose the model for your next message, or open the details panel.
+Type `/router` at any time for a quick menu: switch modes, choose the model for your next message, or open **Status and settings**.
 
 ## Works in the terminal and the desktop app
 
 Decision Router works wherever Claude Code runs: the terminal, your editor, and the Code tab of the Claude desktop app. In the desktop app, its status line appears above the prompt after your first message.
 
-The desktop app doesn't run `/router` commands. Click **Router** at the end of the status line for the quick menu and the details panel, and choose the decision model and add keys in the plugin's settings (Customize > Plugins). The model picker under the prompt keeps showing the model you chose for the session: the router changes the model one message at a time, and the check mark on the status line confirms which one answered.
+The desktop app doesn't run `/router` commands. Click **Router** at the end of the status line for the quick menu and **Status and settings**, and choose the decision model and add keys in the plugin's settings (Customize > Plugins). The model picker under the prompt keeps showing the model you chose for the session: the router changes the model one message at a time, and the check mark on the status line confirms which one answered.
 
 It also works alongside Claude Code's `/advisor`: it never picks a model stronger than your advisor, so the advisor keeps working.
 
@@ -41,9 +41,9 @@ The band under the prompt, with the model the router picked and why:
 
 ![The band in the terminal, under the permission mode](docs/band.png)
 
-The details pane (`/router pane`): the current pick, plan usage, the decision log and tuning:
+**Status and settings** (`/router pane`): the current pick, plan usage, the decision log and tuning:
 
-![The details pane in the terminal](docs/pane.png)
+![Status and settings in the terminal](docs/pane.png)
 
 ### Claude desktop app
 
