@@ -453,11 +453,11 @@ test('the quick menu pins the next turn, switches modes, and turns routing back 
   seen.answers.push('Watch: show picks only')
   await $.command.run({ command: 'router', args: '' })
   expect(seen.asked[5].options).toEqual(['Route: switch models', 'Watch: show picks only', 'Status and settings'])
-  expect(seen.store.get('decision-router:mode')).toBe('watch')
+  expect((seen.store.get('decision-router:mode') as any)?.mode).toBe('watch')
   // Router on the band opens the same menu.
   seen.answers.push('Route: switch models')
   await ui.press({ key: 'details' })
-  expect(seen.store.get('decision-router:mode')).toBe('route')
+  expect((seen.store.get('decision-router:mode') as any)?.mode).toBe('route')
 })
 
 test('dismissing the quick menu changes nothing', KEYS, async ($, on) => {
@@ -465,7 +465,7 @@ test('dismissing the quick menu changes nothing', KEYS, async ($, on) => {
   await start($)
   await $.command.run({ command: 'router', args: '' })
   expect(seen.asked.length).toBe(1)
-  expect(seen.store.get('decision-router:mode')).toBe('route')
+  expect((seen.store.get('decision-router:mode') as any)?.mode).toBe('route')
 })
 
 test('there is no hover row any more', KEYS, async ($, on) => {
@@ -862,7 +862,7 @@ test('settings saved under the old router-enhanced name carry over', KEYS, async
   seen.store.set('router-enhanced:mode', 'route')
   seen.store.set('router-enhanced:journal', [{ at: 1, mode: 'route', tier: 'opus', reason: 'first', difficulty: 3, confidence: 0.9, activity: 'debug', usedPercent: 10, latencyMs: 300, error: null, outcome: 'ok' }])
   await start($)
-  expect(seen.store.get('decision-router:mode')).toBe('route')
+  expect((seen.store.get('decision-router:mode') as any)?.mode).toBe('route')
   expect((seen.store.get('decision-router:journal') as any[]).length).toBe(1)
   await turn($, 't1', 'where is main?')
   // Routing is on, as it was saved.
@@ -1458,4 +1458,80 @@ test('a Fable switch made against an older setting gives way to the setting', KE
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect((await ui.find({ key: 'fable' }))?.props.label).toBe('Off')
   expect(seen.store.get('decision-router:fable')).toBeNull()
+})
+
+test('three tool errors on Opus never reach Fable while Fable is off, and nothing escalates while watching', KEYS, async ($, on) => {
+  const setup: Setup = { mode: 'route', level: 4 }
+  const seen = stubs(on, setup)
+  await start($)
+  await $.turn.start({ turnId: 't1', text: 'redesign the scheduler' })
+  await step($, 't1', 0)
+  expect(seen.models[0]).toBe('claude-opus-5-5')
+  for (let i = 0; i < 3; i += 1) await $.tool.call({ tool: 'Bash', command: 'fail' })
+  await step($, 't1', 1)
+  expect(seen.models[1]).toBe('claude-opus-5-5')
+  // Watching: tool errors change nothing, say nothing and mark nothing.
+  await $.command.run({ command: 'router', args: 'watch' })
+  await turn($, 't2', 'fix the flaky test')
+  for (let i = 0; i < 3; i += 1) await $.tool.call({ tool: 'Bash', command: 'fail' })
+  const toasts = seen.toasts.length
+  await step($, 't2', 1)
+  expect(seen.toasts.length).toBe(toasts)
+  const records = seen.store.get('decision-router:journal') as any[]
+  expect(records[records.length - 1].outcome).toBe('ok')
+})
+
+test('a pinned turn keeps its model after tool errors', KEYS, async ($, on) => {
+  const seen = stubs(on, { mode: 'route', level: 0 })
+  await start($)
+  await turn($, 't1', 'where is parseConfig defined?')
+  await $.command.run({ command: 'router', args: 'pin opus' })
+  await $.turn.start({ turnId: 't2', text: 'now refactor it' })
+  await step($, 't2', 0)
+  for (let i = 0; i < 3; i += 1) await $.tool.call({ tool: 'Bash', command: 'fail' })
+  await step($, 't2', 1)
+  expect(seen.models.slice(-2)).toEqual(['claude-opus-5-5', 'claude-opus-5-5'])
+})
+
+test('a pin is refused while routing is off, and Fable cannot be pinned while it is off', KEYS, async ($, on) => {
+  stubs(on, { mode: 'off', level: 0 })
+  await start($)
+  const off = await $.command.run({ command: 'router', args: 'pin opus' })
+  expect(off.text).toMatch(/^Routing is off, so a pin would not apply/)
+  await $.command.run({ command: 'router', args: 'watch' })
+  const watching = await $.command.run({ command: 'router', args: 'pin opus' })
+  expect(watching.text).toBe('The next turn would run on opus. Watch only: nothing changes until you run /router route.')
+  const fable = await $.command.run({ command: 'router', args: 'pin fable' })
+  expect(fable.text).toMatch(/^Fable is off/)
+})
+
+test('a mode chosen in the plugin gives way when the Mode setting changes after it', { options: { ...KEYS.options, mode: 'Switch models' } }, async ($, on) => {
+  const seen = stubs(on, { level: 0 })
+  // Chosen from the band while the setting read Watch only; the setting now reads Switch models.
+  seen.store.set('decision-router:mode', { mode: 'off', setting: 'watch' })
+  await start($)
+  const status = await $.command.run({ command: 'router', args: 'status' })
+  expect(status.text).toContain('Mode: route.')
+  expect(seen.store.get('decision-router:mode')).toBeNull()
+})
+
+test('a mode chosen against the current setting stands', { options: { ...KEYS.options, mode: 'Switch models' } }, async ($, on) => {
+  const seen = stubs(on, { level: 0 })
+  seen.store.set('decision-router:mode', { mode: 'off', setting: 'route' })
+  await start($)
+  const status = await $.command.run({ command: 'router', args: 'status' })
+  expect(status.text).toContain('Mode: off.')
+})
+
+test('the session model is read again each turn, so the advisor check follows a switch made in the picker', KEYS, async ($, on) => {
+  const setup: Setup = { mode: 'route', level: 4, native: 'claude-opus-5-5', settings: { advisorModel: 'sonnet' } }
+  const seen = stubs(on, setup)
+  await start($)
+  // On Opus the Sonnet advisor does not run, so nothing caps the route.
+  await turn($, 't1', 'redesign the scheduler')
+  expect(seen.models[0]).toBe('claude-opus-5-5')
+  // Switched to Sonnet in the picker, without /model: now the advisor runs and caps routing at Sonnet.
+  setup.native = 'claude-sonnet-5-5'
+  await turn($, 't2', 'redesign the scheduler again')
+  expect(seen.models[1]).toBe('claude-sonnet-5-5')
 })

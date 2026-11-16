@@ -167,13 +167,13 @@ export function decide(input: DecideInput): Decision {
 }
 
 /**
- * One tier up after repeated failures, within the plan-usage cap and the advisor's tier, then a hold so the stronger
- * model gets a chance.
+ * One tier up after repeated failures, within the plan-usage cap, the advisor's tier and `top`, then a hold so the
+ * stronger model gets a chance. `top` keeps Fable out unless it may be picked: Opus by default.
  */
-export function escalate(state: PolicyState, baseline: Tier, usage: PlanUsage, advisor: Tier | null = null): Decision | null {
+export function escalate(state: PolicyState, baseline: Tier, usage: PlanUsage, advisor: Tier | null = null, top: Tier = 'opus'): Decision | null {
   const current = state.tier ?? baseline;
   const target = TIERS[rank(current) + 1];
-  if (!target || rank(target) > rank(capOf(usage, advisor))) return null;
+  if (!target || rank(target) > rank(capOf(usage, advisor)) || rank(target) > rank(top)) return null;
   return {
     tier: target,
     reason: 'escalation',

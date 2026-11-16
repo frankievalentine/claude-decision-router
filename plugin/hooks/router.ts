@@ -12,7 +12,7 @@ import { ownConfig, resolveOptions, savedChoices, settingLabel, upgradeSettings 
 import { accountIdOf, backendOfAnswer, DEFAULT_LOCAL_URL, keyHelp, normalizeUrl, SAMPLE_PROMPT, SETUP_OPTIONS } from '../src/setup.ts';
 import { addUsage, appendSpawn, escalatedTier, isCheaper, kindOf, pickFor, recordOfSpawn, summarize, updateSpawn } from '../src/spawn.ts';
 import type { PickReason, SpawnKind, SpawnMode, SpawnRecord } from '../src/spawn.ts';
-import { advisorCeiling, rank, requestEffort, routeFor, TIERS, tierOfModel } from '../src/tiers.ts';
+import { advisorCeiling, advisorRuns, rank, requestEffort, routeFor, TIERS, tierOfModel } from '../src/tiers.ts';
 import type { Backend, Decision, Features, Mode, PolicyState, Preference, Route, Tier } from '../src/types.ts';
 import { bandText, choiceOf, mainMenu, modelName, pinMenu, renderBand, renderPane, switchToast, tuneAdvice, usageText } from '../src/view.ts';
 import type { Actions, PaneTab, Snapshot } from '../src/view.ts';
@@ -58,7 +58,9 @@ const SPAWN_LOG_KEY = 'decision-router:subagent-log';
 const HOSTED_TIMEOUT_MS = 2500;
 const LOCAL_TIMEOUT_MS = 8000;
 // Setup waits longer than a turn does: a local server loads its model on the first request.
-const SETUP_TIMEOUT_MS = 20000;
+// A hook has 10 seconds of its own time, waits included, so no wait for the decision model goes past 9.
+const MAX_WAIT_MS = 9000;
+const SETUP_TIMEOUT_MS = MAX_WAIT_MS;
 const FAILURES_TO_PAUSE = 3;
 const PAUSE_MS = 60_000;
 const BASELINE: Tier = 'sonnet';
@@ -80,6 +82,9 @@ let detail = false;
 // The pane's Fable switch, beside the Use Fable setting it was flipped against. A session hosted by the desktop app
 // cannot save plugin settings, so the switch is kept here; once the setting is changed after it, the setting rules.
 let fableChoice: { allow: boolean; setting: boolean } | null = null;
+// The mode chosen from the band, the menu, the pane or /router, beside the Mode setting it was chosen against: the
+// same rule as the Fable switch, so a later change to the setting takes over.
+let modeChoice: { mode: Mode; setting: Mode } | null = null;
 let policy: PolicyState = initialState();
 let journal: JournalRecord[] = [];
 let current: { decision: Decision; route: Route | null; features: Features | null } | null = null;
@@ -144,14 +149,19 @@ export function register(on: any, opts: Options) {
     });
     await migrate($);
     await adoptSavedChoices($);
-    mode = pick((await $.store.get(MODE_KEY)) ?? options.mode, ['watch', 'route', 'off'] as const, 'watch');
+    const savedMode: any = await $.store.get(MODE_KEY);
+    // A plain mode was saved before 0.12.8, with no setting beside it: it stands, against the setting as it is now.
+    modeChoice =
+      typeof savedMode === 'string'
+        ? { mode: pick(savedMode, MODES, 'watch'), setting: modeSetting() }
+        : typeof savedMode?.mode === 'string' && typeof savedMode?.setting === 'string'
+          ? { mode: pick(savedMode.mode, MODES, 'watch'), setting: savedMode.setting }
+          : null;
+    if (typeof savedMode === 'string') await $.store.set(MODE_KEY, modeChoice);
     detail = (await $.store.get(DETAIL_KEY)) === true;
     const savedFable: any = await $.store.get(FABLE_KEY);
     fableChoice = typeof savedFable?.allow === 'boolean' && typeof savedFable?.setting === 'boolean' ? savedFable : null;
-    if (fableChoice && fableChoice.setting !== (options.allow_fable === true)) {
-      fableChoice = null;
-      await $.store.set(FABLE_KEY, null);
-    }
+    await settleChoices($);
     const saved = await $.store.get(JOURNAL_KEY);
     journal = Array.isArray(saved) ? saved : [];
     spawnMode = pick(await $.store.get(SPAWN_MODE_KEY), ['on', 'watch', 'off'] as const, 'off');
@@ -202,7 +212,12 @@ export function register(on: any, opts: Options) {
       if (routed && advised(result)) routed.advised = true;
       return result;
     }
-    if (e.index === 0) answered = null;
+    if (e.index === 0) {
+      answered = null;
+      // The session's model can change without /model (the desktop picker, /config): the advisor check needs it now.
+      nativeModel = await $.session.model();
+      await settleChoices($);
+    }
     if (mode === 'off' || paused) return yield* next(e);
     if (e.index === 0) {
       await readAdvisor($);
@@ -218,10 +233,17 @@ export function register(on: any, opts: Options) {
       const after = current?.route ?? null;
       if (mode === 'route' && before && after && current && before.model !== after.model)
         $.ui.toast(switchToast(labelOf(), before, after, current.decision));
-    } else if (toolErrors >= POLICY.escalateAfterErrors && escalatedTurn !== e.turnId && advisedTurn !== e.turnId) {
-      // A turn in which the advisor was consulted keeps its model: the guidance gets the chance a stronger model
-      // would have had, and the prompt cache stays.
-      const up = escalate(policy, BASELINE, { usedPercent }, advisorCap());
+    } else if (
+      mode === 'route' &&
+      current?.decision.reason !== 'pinned' &&
+      toolErrors >= POLICY.escalateAfterErrors &&
+      escalatedTurn !== e.turnId &&
+      advisedTurn !== e.turnId
+    ) {
+      // Only a routed turn escalates: watching, nothing would change. A pinned turn keeps the model you chose, and a
+      // turn in which the advisor was consulted keeps its model, so the guidance gets the chance a stronger model would
+      // have had and the prompt cache stays.
+      const up = escalate(policy, BASELINE, { usedPercent }, advisorCap(), escalationTop(current?.features ?? null));
       escalatedTurn = e.turnId;
       if (up) {
         const before = current?.route ?? null;
@@ -316,11 +338,15 @@ export function register(on: any, opts: Options) {
     if (verb === 'pin') {
       const tier = TIERS.find((t) => t === arg) ?? null;
       if (!tier) return { text: 'Usage: /router pin haiku | sonnet | opus | fable' };
+      if (mode === 'off' || paused) return { text: `Routing is ${paused ? 'paused' : 'off'}, so a pin would not apply. Turn routing on first: /router route.` };
+      if (tier === 'fable' && !fableAllowed()) return { text: 'Fable is off. Turn it on in Status and settings, or in the plugin\'s settings (Use Fable), to pin it.' };
       const cap = advisorCap();
       pin = cap && rank(tier) > rank(cap) ? cap : tier;
       $.ui.invalidate('ui.render');
-      if (pin !== tier) return { text: `The next turn runs on ${pin}: ${tier} would run without the advisor (${advisorText()}).` };
-      return { text: `The next turn runs on ${tier}.` };
+      const runs = mode === 'watch' ? 'would run' : 'runs';
+      const watching = mode === 'watch' ? ' Watch only: nothing changes until you run /router route.' : '';
+      if (pin !== tier) return { text: `The next turn ${runs} on ${pin}: ${tier} would run without the advisor (${advisorText()}).${watching}` };
+      return { text: `The next turn ${runs} on ${tier}.${watching}` };
     }
     if (verb === 'log') return { text: logText(journal, Number(arg) || 10) };
     if (verb === 'tune') return { text: tuneText(journal) };
@@ -442,8 +468,23 @@ async function adoptSavedChoices($: any) {
 async function applyMode($: any, m: Mode) {
   paused = false;
   mode = m;
-  await $.store.set(MODE_KEY, mode);
+  modeChoice = { mode: m, setting: modeSetting() };
+  await $.store.set(MODE_KEY, modeChoice);
   $.ui.invalidate('ui.render');
+}
+
+// The mode and the Fable switch, each the latest change: a choice made in the plugin stands until the setting it was
+// made against changes, and then the setting rules and the choice is cleared, so it cannot come back.
+async function settleChoices($: any) {
+  if (modeChoice && modeChoice.setting !== modeSetting()) {
+    modeChoice = null;
+    await $.store.set(MODE_KEY, null);
+  }
+  mode = modeChoice?.mode ?? modeSetting();
+  if (fableChoice && fableChoice.setting !== (options.allow_fable === true)) {
+    fableChoice = null;
+    await $.store.set(FABLE_KEY, null);
+  }
 }
 
 async function setSpawnMode($: any, m: SpawnMode): Promise<string> {
@@ -463,7 +504,7 @@ async function setSpawnMode($: any, m: SpawnMode): Promise<string> {
 }
 
 async function pinNext($: any, tier: Tier | null) {
-  pin = tier;
+  pin = tier === 'fable' && !fableAllowed() ? null : tier;
   $.ui.invalidate('ui.render');
 }
 
@@ -489,6 +530,9 @@ function fableAllowed(): boolean {
   const setting = options.allow_fable === true;
   return fableChoice && fableChoice.setting === setting ? fableChoice.allow : setting;
 }
+
+const MODES = ['watch', 'route', 'off'] as const;
+const modeSetting = (): Mode => pick(options.mode, MODES, 'watch');
 
 async function openPane($: any) {
   paneTab = 'now';
@@ -802,8 +846,9 @@ function askAboutSpawn($: any, id: string, prompt: string, actual: Tier | null) 
 // One tier up after repeated tool errors, within the subagent's ceiling, once. A subagent already at its ceiling stays.
 async function escalateSpawn($: any, id: string, routed: SpawnRoute) {
   routed.escalated = true;
-  const cap = advisorCap();
-  const tier = escalatedTier(routed.tier, cap && rank(cap) < rank(routed.ceiling) ? cap : routed.ceiling);
+  // Never to Fable: a subagent only ever moves within the models it would have had, and Fable needs its own consent.
+  const cap = lower(lower(routed.ceiling, advisorCap()), 'opus');
+  const tier = escalatedTier(routed.tier, cap);
   if (!tier) return;
   const route = await routeOf($, tier, routed.features);
   if (!route) return;
@@ -1020,12 +1065,22 @@ const advised = (result: any): boolean => Array.isArray(result?.serverToolUses) 
 function advisorCap(): Tier | null {
   const set = advisorModel ? advisorCeiling(advisorModel) : null;
   const native = tierOfModel(nativeModel);
-  const active = set && (!native || rank(set) >= rank(native)) ? set : null;
+  // Whether it runs is a question of ranks, by version: an Opus 4.8 advisor runs beside an Opus 4.8 session.
+  const active = set && advisorModel && advisorRuns(advisorModel, nativeModel) ? set : null;
   const seen = advisorSeen && !advisorModel ? higher(advisorSeen, native) : advisorSeen;
   return higher(active, seen);
 }
 
 const higher = (a: Tier | null, b: Tier | null): Tier | null => (a && b ? (rank(a) >= rank(b) ? a : b) : (a ?? b));
+const lower = (a: Tier, b: Tier | null): Tier => (b && rank(b) < rank(a) ? b : a);
+
+/**
+ * The strongest tier an escalation may reach: Fable only where it is allowed and the work is not security-sensitive,
+ * the same terms on which the decision model's advice can pick it.
+ */
+function escalationTop(features: Features | null): Tier {
+  return fableAllowed() && (features?.security ?? 0) < 0.5 ? 'fable' : 'opus';
+}
 
 /** "Opus", "Opus 4.7", or "on" for an advisor seen in use but not in the settings. */
 function advisorText(): string {
@@ -1065,7 +1120,7 @@ function labelOf(): string {
 
 function timeoutOf(endpoint: Endpoint): number {
   const set = options.timeout_ms;
-  if (typeof set === 'number' && set >= 200) return set;
+  if (typeof set === 'number' && set >= 200) return Math.min(set, MAX_WAIT_MS);
   return endpoint.local ? LOCAL_TIMEOUT_MS : HOSTED_TIMEOUT_MS;
 }
 

@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { backendOf, confidenceOf, endpointFor, hostOf, parseAnswers, warmupBody } from '../src/classifier.ts'
+import { backendOf, confidenceOf, endpointFor, hostOf, parseAnswers, systemOneUrl, warmupBody } from '../src/classifier.ts'
 import { mostLikely, tierConfidence, tierDistribution } from '../src/features.ts'
 import { reasonText } from '../src/view.ts'
 import { append, markAnswered, markOverride, recordOf, tune } from '../src/journal.ts'
@@ -8,7 +8,7 @@ import { capOf, decide, escalate, usageCap, initialState } from '../src/policy.t
 import type { DecideInput } from '../src/policy.ts'
 import { appendSpawn, escalatedTier, isCheaper, kindOf, MAX_SPAWN_RECORDS, pickFor, recordOfSpawn, summarize } from '../src/spawn.ts'
 import { resolveOptions, savedChoices, settingLabel, upgradeSettings, valueOf } from '../src/settings.ts'
-import { advisorCeiling, routeFor, sameModel, tierOfModel } from '../src/tiers.ts'
+import { advisorCeiling, advisorRank, advisorRuns, routeFor, sameModel, tierOfModel } from '../src/tiers.ts'
 import type { Features, Tier } from '../src/types.ts'
 
 // A features object with difficulty concentrated on `level` (0-4).
@@ -386,4 +386,34 @@ test('markAnswered marks the newest record once', () => {
   expect(marked[0].answered).toBeUndefined()
   expect(markAnswered(marked, 'claude-haiku-5-5')).toBe(marked)
   expect(markAnswered([], 'claude-haiku-5-5')).toEqual([])
+})
+
+test('escalation stops at Opus unless Fable may be picked', () => {
+  const opus = { tier: 'opus' as Tier, votes: [], hold: 0 }
+  expect(escalate(opus, 'sonnet', { usedPercent: 10 })).toBe(null)
+  expect(escalate(opus, 'sonnet', { usedPercent: 10 }, null, 'opus')).toBe(null)
+  expect(escalate(opus, 'sonnet', { usedPercent: 10 }, null, 'fable')?.tier).toBe('fable')
+  // The plan-usage cap still applies on top.
+  expect(escalate(opus, 'sonnet', { usedPercent: 80 }, null, 'fable')).toBe(null)
+})
+
+test('advisor ranks go by version: an older model pairs with its own advisor', () => {
+  expect(advisorRank('claude-opus-4-8')).toBe(5)
+  expect(advisorRank('opus')).toBe(7)
+  expect(advisorRank('claude-opus-5-5[1m]')).toBe(7)
+  expect(advisorRank('claude-mystery-1')).toBe(null)
+  // Opus 4.8 runs beside an Opus 4.8 session, and caps routing at Haiku 5.5, the one current model it still ranks above.
+  expect(advisorRuns('claude-opus-4-8', 'claude-opus-4-8')).toBe(true)
+  expect(advisorCeiling('claude-opus-4-8')).toBe('haiku')
+  // A Sonnet 5.5 advisor does not run beside an Opus 5.5 session.
+  expect(advisorRuns('claude-sonnet-5-5', 'claude-opus-5-5')).toBe(false)
+  expect(advisorRuns('sonnet', 'claude-sonnet-5')).toBe(true)
+})
+
+test('a System One address typed bare gets its path', () => {
+  expect(systemOneUrl('http://10.0.0.9:8888')).toBe('http://10.0.0.9:8888/v1/systemone')
+  expect(systemOneUrl('http://10.0.0.9:8888/')).toBe('http://10.0.0.9:8888/v1/systemone')
+  expect(systemOneUrl('http://10.0.0.9:30000/v1/systemone')).toBe('http://10.0.0.9:30000/v1/systemone')
+  const e = endpointFor({ backend: 'local', localUrl: 'http://10.0.0.9:8888' })
+  expect('url' in e && e.url).toBe('http://10.0.0.9:8888/v1/systemone')
 })

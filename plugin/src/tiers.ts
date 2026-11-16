@@ -35,30 +35,51 @@ export function sameModel(a: string, b: string): boolean {
 }
 
 /**
- * Claude Code's advisor pairing table for the models in MODEL_IDS: the oldest version of each family each main model
- * accepts as its advisor. An advisor must rank at or above the main model, so this changes with MODEL_IDS.
+ * Each model's advisor rank, from Claude Code's model catalog. An advisor runs beside a main model only when its rank
+ * is at least the main model's; below that the main model runs without it.
  */
-const ADVISORS: Record<Tier, Partial<Record<Tier, number>>> = {
-  haiku: { fable: 0, opus: 4.7, sonnet: 5, haiku: 5.5 },
-  sonnet: { fable: 0, opus: 5, sonnet: 5.5 },
-  opus: { fable: 0, opus: 5 },
-  fable: { fable: 5.2 },
+const ADVISOR_RANK: Record<string, number> = {
+  'claude-haiku-4-5': 1,
+  'claude-sonnet-4-6': 2,
+  'claude-opus-4-6': 3,
+  'claude-haiku-5-5': 4,
+  'claude-sonnet-5': 4,
+  'claude-opus-4-7': 5,
+  'claude-opus-4-8': 5,
+  'claude-sonnet-5-5': 6,
+  'claude-opus-5': 7,
+  'claude-opus-5-5': 7,
+  'claude-fable-5': 8,
+  'claude-mythos-5': 8,
+  'claude-fable-5-1': 9,
+  'claude-mythos-5-1': 9,
+  'claude-fable-5-2': 10,
+  'claude-mythos-5-2': 10,
 };
 
 /**
- * The strongest tier whose model accepts `advisor` (an alias or a full id) as its advisor, or null when none does. An
- * alias resolves to its family's current model, so it counts as the newest version.
+ * A model's advisor rank, by its id or alias, or null for a model the catalog does not rank. An alias ("opus") is its
+ * family's current model.
  */
+export function advisorRank(model: string | null | undefined): number | null {
+  const id = String(model ?? '').toLowerCase().replace(/\[.*\]$/, '').replace(/-\d{8}$/, '');
+  if (id in ADVISOR_RANK) return ADVISOR_RANK[id];
+  const family = (TIERS as readonly string[]).includes(id) ? (id as Tier) : null;
+  return family ? ADVISOR_RANK[MODEL_IDS[family]] : null;
+}
+
+/** Whether `advisor` runs beside `model`: its rank is at least the model's. Unranked either way counts as running. */
+export function advisorRuns(advisor: string, model: string | null | undefined): boolean {
+  const a = advisorRank(advisor);
+  const m = advisorRank(model);
+  return a === null || m === null || a >= m;
+}
+
+/** The strongest tier whose model `advisor` (an alias or a full id) runs beside, or null when it runs beside none. */
 export function advisorCeiling(advisor: string): Tier | null {
-  const s = advisor.toLowerCase();
-  const family = tierOfModel(s);
-  if (!family) return null;
-  const m = s.match(new RegExp(`${family}-(\\d+)(?:-(\\d{1,2})(?!\\d))?`));
-  const version = m ? Number(m[1]) + Number(m[2] ?? 0) / 10 : Infinity;
-  for (let i = TIERS.length - 1; i >= 0; i -= 1) {
-    const oldest = ADVISORS[TIERS[i]][family];
-    if (oldest !== undefined && version >= oldest) return TIERS[i];
-  }
+  const a = advisorRank(advisor);
+  if (a === null) return null;
+  for (let i = TIERS.length - 1; i >= 0; i -= 1) if (ADVISOR_RANK[MODEL_IDS[TIERS[i]]] <= a) return TIERS[i];
   return null;
 }
 

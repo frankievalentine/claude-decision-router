@@ -18,7 +18,7 @@ It's careful about switching. It won't change models on a single message, it sta
 
 ## Getting started
 
-1. Install Decision Router. In Claude Code, run `/plugin install decision-router --marketplace frankievalentine/claude-decision-router`. In the desktop app, open Customize > Plugins, add the marketplace `frankievalentine/claude-decision-router`, then add Decision Router.
+1. Install Decision Router. In Claude Code, run `/plugin marketplace add frankievalentine/claude-decision-router`, then `/plugin install decision-router@decision-router-local`. In the desktop app, open Customize > Plugins, add the marketplace `frankievalentine/claude-decision-router`, then add Decision Router.
 2. Run `/router setup` and choose where the decision model runs: on a hosted service (Cloudflare or TypeSafe) or on your own computer (llama.cpp, Unsloth or SGLang). Add any key it needs in the plugin's settings.
 3. Use it as usual. It starts in **Watch only** mode: it shows what it would pick and changes nothing.
 4. When the picks look right, run `/router route` to let it switch models for you.
@@ -37,8 +37,9 @@ The model picker keeps showing the model you chose for the session, since the ro
 
 ## What it sends, and where
 
-- **Your message goes to the decision model you choose**, so it can rate the task. With llama.cpp, Unsloth or SGLang, it stays on your own computer or network. With Cloudflare or TypeSafe, it's sent to that service.
-- **If you turn on subagent routing** (`/router subagents on`, off by default), the task Claude gives each general subagent is sent the same way.
+- **Your message goes to the decision model you choose**, so it can rate the task: its first 6,000 characters, with the last two messages of the conversation (500 characters each, Claude's replies included) so it can tell a follow-up from a new task. With llama.cpp, Unsloth or SGLang, it stays on your own computer or network. With Cloudflare or TypeSafe, it's sent to that service.
+- **If you turn on subagent routing or watching** (`/router subagents on` or `watch`, both off by default), the task Claude gives each general subagent is sent the same way.
+- **Fixed requests:** with a server on your own computer or network, a short warm-up request when a session starts; `/router setup` and `/router test` send one fixed sample task. Neither contains anything you typed.
 - **Nothing else leaves your machine.** The router's own log keeps labels and numbers only, never the text of your messages.
 - **Keys stay in your settings.** API keys are entered only in the plugin's settings, where Claude Code stores them in your system's secure credential store. The plugin never reads keys from your environment.
 
@@ -57,13 +58,14 @@ Decision Router is a hooks module: code that Claude Code runs at set points. Her
 - **`/model` and `/advisor`** (`command.run`). Both run unchanged. Picking a model with `/model` pauses routing for the session; after `/advisor` the router reads the new advisor setting.
 - **Reading settings** (`settings.read`). Choices saved by versions before 0.12 are shown under their new labels, so they keep working. The settings file itself is not changed.
 - **Drawing** (`ui.render`). It adds the status line by the prompt, the words "Choosing model" on the spinner while the decision model answers, and the Status and settings panel. Everything Claude Code draws itself is left as it is.
-- **The `/router` command**, which it adds.
+- **Session start** (`session.start`). It adds the `/router` command, loads its saved choices and, for a server on your network, sends the warm-up request.
+- **Usage readings** (`session.measure`) and **turn ends** (`turn.complete`). It reads plan usage and context fill for the policy and the band, and saves a subagent's record when it finishes. Nothing is changed.
 
 **Settings it changes:** only its own, and only when you ask. `/router setup` saves the decision model, server address and Cloudflare account ID you choose, and the Fable switch in Status and settings saves **Use Fable**. It never changes Claude Code's own settings, permission mode or Remote Control, and sets no environment variables.
 
 **Environment variables it reads:** `CLAUDE_CODE_SUBAGENT_MODEL` and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`, so subagent routing respects a model you set for subagents, and `CLAUDE_CODE_DISABLE_ADVISOR_TOOL`, so an advisor you turned off is not counted. Nothing else, and no keys.
 
-**What it keeps:** your mode, panel choices and a decision log of labels and numbers, in Claude Code's plugin storage on your computer.
+**What it keeps:** in Claude Code's plugin storage on your computer, your mode, the panel's choices (session row, Fable switch), the subagent mode, and a decision log and subagent log of labels and numbers.
 
 ## Learn more
 

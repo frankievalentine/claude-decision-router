@@ -13,7 +13,7 @@ A decision model (Cloudflare's Clef or TypeSafe's Jev) **describes** each task: 
 1. **`turn.start`**: the request to the decision model starts as soon as the turn exists, so its answer is usually ready by the first model request. A turn with no typed text (a continuation) asks nothing and keeps its route.
 2. **First `turn.step`**: the answers become a tier distribution (`src/features.ts`), and the policy (`src/policy.ts`) decides whether to move.
 3. **Every `turn.step`** of the main conversation runs on the chosen model and effort. Subagents have their own routing, which is off by default (see Routing subagents).
-4. **Three tool errors in a turn** move up one tier for the rest of it, then hold for two turns.
+4. **Three tool errors in a turn** move up one tier for the rest of it, then hold for two turns. Only in Switch models mode, never on a pinned turn, and not to Fable unless it is allowed.
 5. **Picking a model yourself** with `/model` pauses routing for the session and records the correction.
 6. **`ultrathink` is respected**: a request Claude Code raised to `xhigh` or `max` keeps that effort on whichever model the router picks.
 7. **A pin** (`/router pin opus`, or the pane's buttons) runs the next turn on that tier without asking the decision model, then routing carries on where it was.
@@ -23,10 +23,10 @@ A decision model (Cloudflare's Clef or TypeSafe's Jev) **describes** each task: 
 ![The band under the permission mode](band.png)
 
 - **The band**, on the line under the prompt, below the permission mode (`auto mode on`). In the desktop app's Code tab, which has no such line, it sits above the prompt instead, and appears once you send the first message of a session. Its design is claude-router's: signal bars lit up to the tier, the tier pill, the activity in orange, the model and effort, a green `✓` once the API reports that model answered, the reason (`↑ jump`, `↓ downgrade`, `= fits`, `… waiting to go up`), the decision model's evidence against the bar (`Laya 91% ≥ 82%`), your 5-hour and weekly plan usage, context fill and cache hit. Parts drop from the right as the terminal narrows; the tier and model never do.
-- **The quick menu**: `/router`, or **Router** at the end of the band. A numbered question in Claude Code's own dialog, answered from the keyboard: switch between route and watch, pin the next turn (a second step asks which model), turn routing off or on, or open **Status and settings**. Esc closes it without changing anything.
+- **The quick menu**: `/router`, or **Router options** at the end of the band. A numbered question in Claude Code's own dialog, answered from the keyboard: switch between route and watch, pin the next turn (a second step asks which model), turn routing off or on, or open **Status and settings**. Esc closes it without changing anything.
 - **Faults lead the band**, in yellow, with where they happened: `⚠ Laya: timed out after 8 s at 10.0.0.9:8888 · keeping model`. So does a reply from a model other than the one the router asked for, which Claude Code can do on its own (falling back when a model is overloaded): `⚠ answered by Opus 5.5`.
-- **What answered.** Each reply carries the model the API says answered it. In route mode the band confirms it, the pane's Now tab shows it under **Answered by**, and the log keeps it with each decision; `/router log` and the Log tab add `ran <model>` where it differs from the pick. In watch mode the session's own model runs, so the log records that and the band shows no check.
-- **Status and settings**, the pane (`/router pane`, or Status and settings in the menu), with Now, Log and Tune tabs. Every control is there too, including **Session row**, which adds a second band line with turns per tier and switches. In the desktop app, VS Code and the mobile app it has a layout of its own: plain section headings, drawn bars, the close control at the top, and no plan usage or context fill, which the desktop app shows itself. A decision-model fault on the band has a **Status** button that opens it.
+- **What answered.** Each reply carries the model the API says answered it. In route mode the band confirms it, the pane's Now tab (Overview on graphical surfaces) shows it under **Answered by**, and the log keeps it with each decision; `/router log` and the Log tab (History) add `ran <model>` where it differs from the pick. In watch mode the session's own model runs, so the log records that and the band shows no check.
+- **Status and settings**, the pane (`/router pane`, or Status and settings in the menu), with Now, Log and Tune tabs (Overview, History and Tuning on graphical surfaces). Every control is there too, including **Session row**, which adds a second band line with turns per tier and switches. In the desktop app, VS Code and the mobile app it has a layout of its own: a Status card first, cards with plain headings, drawn bars, a tab bar, and no plan usage or context fill, which the desktop app shows itself. A decision-model fault on the band has a **Status** button that opens it.
 
 ![The pane](pane.png)
 
@@ -38,7 +38,7 @@ A decision model (Cloudflare's Clef or TypeSafe's Jev) **describes** each task: 
 - **Evidence before switching.** A move up needs enough probability above the current tier on two consecutive turns, or one strong answer. A move down needs a clear majority on two turns, and never happens in the middle of a task.
 - **The prompt cache counts.** Switching models discards the cached conversation, so the bar rises with the size of the context.
 - **Plan usage.** As the higher of your 5-hour and weekly usage passes 50%, 75% and 90%, moving up gets harder and moving down easier. From 75% the top tier is Opus; from 95%, Sonnet.
-- **Fable** (off by default) is used only when the decision model rates a task very hard, never for security-sensitive work, and not past 75% usage. It may bill to usage credits.
+- **Fable** (off by default) is used only when the decision model rates a task very hard, never for security-sensitive work, and not past 75% usage. It may bill to usage credits. Tool-error escalation stops at Opus unless Fable is allowed, and a subagent never escalates to it.
 - **Security-sensitive work** runs on Sonnet or above.
 - **Fails open.** A missing key, a dead server, a timeout or a low-confidence answer leaves your current model alone. Three failures in a row pause the decision model for a minute.
 - **The advisor.** Claude Code's [advisor](https://code.claude.com/docs/en/advisor) only works with a main model at or below it, and a main model above it runs without one. With `advisorModel` set, routing, pins and escalations stay at the strongest tier your advisor still applies to: Opus or below for an Opus advisor, Sonnet or below for a Sonnet one. The router reads the setting at session start, before each turn and on `/router`, so a change with `/advisor` applies from the next turn. It ignores it when `CLAUDE_CODE_DISABLE_ADVISOR_TOOL` is set, and shows it on the band, the pane and `/router status`.
@@ -62,7 +62,7 @@ Requires Claude Code 2.1.299 or later (per-request model changes, and the `weigh
 
 To work on the code instead, load the folder directly: `claude --plugin-dir ~/claude-decision-router/plugin`. Claude Code then hot-reloads your edits and writes the mods API types into `.claude-plugin/types/` for your editor. Every setting, keys included, still comes from the plugin's settings.
 
-**The desktop app.** The Code tab runs Claude Code itself, so the plugin works there as it does in the terminal: install it from Customize > Plugins (Add marketplace with `frankievalentine/claude-decision-router`, then Add plugin), and change its settings on the same screen. The band sits above the prompt and appears after the first message of a session, since the app starts Claude Code for a session only then. The app's prompt does not run commands a plugin adds, so `/router` and its subcommands answer that they are not available there: use **Router** at the end of the band for the quick menu and the pane, and the plugin's settings for the decision model and keys. The model picker under the prompt keeps showing the session's own model, which the router leaves alone; the band's `✓` is the confirmation that the routed model answered.
+**The desktop app.** The Code tab runs Claude Code itself, so the plugin works there as it does in the terminal: install it from Customize > Plugins (Add marketplace with `frankievalentine/claude-decision-router`, then Add plugin), and change its settings on the same screen. The band sits above the prompt and appears after the first message of a session, since the app starts Claude Code for a session only then. The app's prompt does not run commands a plugin adds, so `/router` and its subcommands answer that they are not available there: use **Router options** at the end of the band for the quick menu and the pane, and the plugin's settings for the decision model and keys. The model picker under the prompt keeps showing the session's own model, which the router leaves alone; the band's `✓` is the confirmation that the routed model answered.
 
 ## Backends
 
@@ -128,7 +128,7 @@ Set **Decision model** to Unsloth or SGLang server, **Server address** to `http:
 
 | Setting | What it does |
 |---|---|
-| Mode | Watch only (show the pick, change nothing), Switch models, or Off. `/router` changes it too |
+| Mode | Watch only (show the pick, change nothing), Switch models, or Off. `/router`, the band and the pane change it too; the latest change, there or in this setting, wins |
 | Priority | Save usage, Balanced or Best answers: how readily the router reaches for a stronger model |
 | Use Fable | Lets very hard, non-security tasks run on Fable 5.2, which may bill to usage credits. The switch in Status and settings changes it too, and works in the desktop app, where a session cannot save plugin settings: the switch is kept in the plugin's storage, and the latest change, the switch or this setting, wins |
 | Decision model | Where the decision model runs (see Backends) |
@@ -137,12 +137,12 @@ Set **Decision model** to Unsloth or SGLang server, **Server address** to `http:
 | TypeSafe API key | For TypeSafe |
 | Model name (advanced) | The model to ask; empty uses each backend's default (`clef-flash`, `jev-latest`, Unsloth's selected model, or none for a single-model llama-server) |
 | Confidence to switch (advanced) | Below this confidence in the tier the decision model points to (0 spread evenly over the tiers, 1 certain, computed the same way for every backend), the current model is kept. Default 0.45 |
-| Wait time, ms (advanced) | How long to wait for the decision model; 0 means 2500 for hosted backends and 8000 for local ones |
+| Wait time, ms (advanced) | How long to wait for the decision model, at most 9000 (a hook has about 10 seconds); 0 means 2500 for hosted backends and 8000 for local ones |
 
 ## Commands
 
 - `/router`: the quick menu (or the status as text where no one can answer it). Unknown words print the list of commands
-- `/router pane`: the pane with Now, Log and Tune
+- `/router pane`: the pane with Now, Log and Tune (Overview, History and Tuning on graphical surfaces)
 - `/router setup`: choose a backend, find or name its server, test it and save the settings. Keys are never asked for in the dialog, since what you type there stays in the scrollback
 - `/router test`: send one request to the configured decision model and report the answer or the fault
 - `/router status`: the status as text, with the last decision-model error

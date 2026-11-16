@@ -34,6 +34,11 @@ export function backendOf(value: unknown): Backend {
   return BACKENDS.includes(value as Backend) ? (value as Backend) : 'clef-workers';
 }
 
+/** A System One server's address: one typed bare ("10.0.0.9:8888") gets the path the server answers on. */
+export function systemOneUrl(url: string): string {
+  return /^[a-z]+:\/\/[^/]+\/?$/i.test(url) ? `${url.replace(/\/$/, '')}/v1/systemone` : url;
+}
+
 /** llama-server's base address from whatever the person typed: a bare host, the /v1 base, or a full endpoint URL. */
 export function llamaBase(url: string): string {
   return url.replace(/\/+$/, '').replace(/\/v1(\/.*)?$/, '');
@@ -76,7 +81,7 @@ export function endpointFor(s: EndpointSettings): Endpoint | { error: string } {
       // A System One server you run: Unsloth serving Laya or Clef (port 8888, where `default` is the model selected
       // in Unsloth), or Clef on SGLang (port 30000, model Cloudflare/clef or Cloudflare/clef-flash).
       return {
-        url: s.localUrl || 'http://127.0.0.1:8888/v1/systemone',
+        url: systemOneUrl(s.localUrl || 'http://127.0.0.1:8888/v1/systemone'),
         model: s.decisionModel || 'default',
         key: 'local_api_key',
         keyRequired: false,

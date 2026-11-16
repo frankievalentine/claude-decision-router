@@ -28,7 +28,9 @@ Nothing is sent when the router is off, for a message you send without typing te
 ## What the plugin keeps
 
 - **Settings**, in Claude Code's settings. API keys are kept in your system's secure credential store, never in plain text, and are only ever read from the plugin's settings, never from your environment.
-- **A decision log** on your computer, in Claude Code's plugin storage: for each message, the model chosen, the reason, the decision model's ratings as numbers, your plan usage and any error. It never contains the text of your messages or tasks.
+- **A decision log** on your computer, in Claude Code's plugin storage: for each message, the model chosen, the reason, the decision model's ratings as numbers, your plan usage, the model that answered and any error. It never contains the text of your messages or tasks.
+- **A subagent log**, with subagent routing or watching on: for each subagent, its kind, the model picked and the one it ran on, token counts and tool errors. No task text.
+- **Your choices** made in the plugin, in the same storage: the mode, the Status and settings panel's session-row and Fable switches, and the subagent mode.
 
 The plugin has no analytics or telemetry of its own, and sends nothing to its author.
 
