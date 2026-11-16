@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { backendOf, confidenceOf, endpointFor, hostOf, parseAnswers, warmupBody } from '../src/classifier.ts'
 import { mostLikely, tierConfidence, tierDistribution } from '../src/features.ts'
+import { reasonText } from '../src/view.ts'
 import { append, markAnswered, markOverride, recordOf, tune } from '../src/journal.ts'
 import type { JournalRecord } from '../src/journal.ts'
 import { capOf, decide, escalate, usageCap, initialState } from '../src/policy.ts'
@@ -82,6 +83,17 @@ test('a moderate answer does not switch on one vote', async () => {
   const two = decide(input({ state: one.state, distribution: split }))
   expect(two.tier).toBe('opus')
   expect(two.reason).toBe('upgrade')
+})
+
+test('advice too unsure to follow is a stay where it points at the model running, and a wait where it does not', async () => {
+  const state = { tier: 'sonnet' as Tier, votes: [], hold: 0 }
+  const same = decide(input({ state, distribution: { sonnet: 0.5, opus: 0.3, haiku: 0.2 }, confidence: 0.2, minConfidence: 0.45 }))
+  expect(same.tier).toBe('sonnet')
+  expect(same.reason).toBe('stay')
+  const up = decide(input({ state, distribution: { sonnet: 0.3, opus: 0.5, haiku: 0.2 }, confidence: 0.2, minConfidence: 0.45 }))
+  expect(up.tier).toBe('sonnet')
+  expect(up.reason).toBe('low-confidence')
+  expect(reasonText(up)).toBe('… waiting to go up')
 })
 
 test('a strong answer switches at once', async () => {

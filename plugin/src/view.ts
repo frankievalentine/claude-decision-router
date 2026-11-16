@@ -111,7 +111,7 @@ const LONG_REASON: Record<string, string> = {
   downgrade: 'a lighter task: a cheaper model is enough',
   hold: 'holding after an escalation',
   'same-task': 'same task: no cheaper move mid-task',
-  'low-confidence': 'the decision model was unsure, so the model stays',
+  'low-confidence': 'the decision model leaned another way, but not surely enough to switch',
   'no-advice': 'no answer from the decision model, so the model stays',
   escalation: 'repeated tool errors moved it up',
   'usage-cap': 'plan usage is high: capped to a cheaper tier',
@@ -134,9 +134,13 @@ export const routeLabel = (r: Route) => `${modelName(r.model)} · ${r.effort}`;
 const pct = (x: number | null | undefined, scale = 1) =>
   typeof x === 'number' && Number.isFinite(x) ? `${Math.round(x * scale)}%` : '?';
 
-/** The move's reason; a stay that fell short of its bar says which way it was waiting to go. */
+/**
+ * The move's reason. A stay that fell short of its bar, and advice too unsure to follow, say which way the model was
+ * waiting to go.
+ */
 export function reasonText(d: Decision): string {
-  if (d.reason === 'stay' && d.distribution && typeof d.bar === 'number' && typeof d.mass === 'number' && d.mass < d.bar) {
+  const short = d.reason === 'stay' && typeof d.bar === 'number' && typeof d.mass === 'number' && d.mass < d.bar;
+  if ((short || d.reason === 'low-confidence') && d.distribution) {
     return rank(mostLikely(d.distribution)) > rank(d.tier) ? '… waiting to go up' : '… waiting to go down';
   }
   return SHORT_REASON[d.reason] ?? d.reason;

@@ -123,7 +123,12 @@ export function decide(input: DecideInput): Decision {
   if (state.tier && rank(state.tier) > rank(cap))
     return out(cap, cap === usageCap(usage) ? 'usage-cap' : 'advisor-cap', { ...state, votes: [] });
   if (!dist) return out(capped(incumbent, cap), 'no-advice', state);
-  if (input.confidence < input.minConfidence) return out(capped(incumbent, cap), 'low-confidence', state);
+  // Too unsure to move: the model stays. Where the advice points at the model already running, there was no move to
+  // be unsure about, so it is a plain stay.
+  if (input.confidence < input.minConfidence) {
+    const kept = capped(incumbent, cap);
+    return out(kept, capped(mostLikely(dist), cap) === kept ? 'stay' : 'low-confidence', state);
+  }
 
   const choice = capped(mostLikely(dist), cap);
   const votes = [...state.votes.slice(-2), choice];
