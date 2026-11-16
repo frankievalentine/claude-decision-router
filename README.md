@@ -1,4 +1,4 @@
-<p align="center"><img src="plugin/docs/icon.png" alt="Decision Router icon" width="128"></p>
+<img src="plugin/docs/icon.png" alt="Decision Router icon" width="128">
 
 # Decision Router
 
