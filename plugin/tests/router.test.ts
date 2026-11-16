@@ -23,7 +23,17 @@ function answers(level: number, extra: Record<string, unknown> = {}) {
   }
 }
 
-type Setup = { mode?: string; level?: number; fetch?: (e: any) => any; usage?: number; env?: Record<string, string> }
+type Setup = {
+  mode?: string
+  level?: number
+  fetch?: (e: any) => any
+  usage?: number
+  env?: Record<string, string>
+  settings?: Record<string, unknown>
+  native?: string
+  // Every model response carries an advisor call.
+  advisor?: boolean
+}
 
 // Registers every stub a session needs. Returns what the test reads back.
 function stubs(on: any, setup: Setup) {
@@ -67,8 +77,8 @@ function stubs(on: any, setup: Setup) {
       ],
     },
   }))
-  on('settings.read', () => ({ value: {} }))
-  on('session.model', () => ({ value: 'claude-opus-5-5' }))
+  on('settings.read', () => ({ value: setup.settings ?? {} }))
+  on('session.model', () => ({ value: setup.native ?? 'claude-opus-5-5' }))
   on('ui.toast', ($: any, e: any) => {
     seen.toasts.push(e.text)
     return { value: undefined }
@@ -87,7 +97,8 @@ function stubs(on: any, setup: Setup) {
     seen.models.push(e.model)
     seen.efforts.push(e.effort)
     const usage = { input_tokens: 0, output_tokens: 10, cache_read_input_tokens: 900, cache_creation_input_tokens: 100 }
-    return { turnId: e.turnId, index: e.index, answer: 'ok', toolUses: [], stopReason: 'end_turn', usage }
+    const serverToolUses = setup.advisor ? [{ id: `adv-${e.index}`, name: 'advisor', input: {}, startedAt: 0, endedAt: 1 }] : undefined
+    return { turnId: e.turnId, index: e.index, answer: 'ok', toolUses: [], serverToolUses, stopReason: 'end_turn', usage }
   })
   on('tool.call', ($: any, e: any) => {
     // The quick menu reaches Claude Code as an AskUserQuestion call: answer it from the queue, or dismiss it.
@@ -223,6 +234,80 @@ test('repeated tool errors escalate mid-turn', async ($, on) => {
   await step($, 't1', 1)
   expect(seen.models).toEqual(['claude-haiku-5-5', 'claude-sonnet-5-5'])
   expect(seen.toasts).toContain('Model changed: Haiku 5.5 · low → Sonnet 5.5 · low · tool errors')
+})
+
+// --- The advisor ---
+
+test('an advisor in the settings keeps routing and pins at or below it, and the status names it', async ($, on) => {
+  const seen = stubs(on, { mode: 'route', level: 4, settings: { advisorModel: 'sonnet' }, native: 'claude-sonnet-5-5' })
+  await start($)
+  await turn($, 't1', 'design a new storage engine')
+  expect(seen.models[0]).toBe('claude-sonnet-5-5')
+  const status = await $.command.run({ command: 'router', args: 'status' })
+  expect(status.text).toMatch(/Advisor: Sonnet\. Routing stays at sonnet or below/)
+  const pinned = await $.command.run({ command: 'router', args: 'pin opus' })
+  expect(pinned.text).toBe('The next turn runs on sonnet: opus would run without the advisor (Sonnet).')
+  await turn($, 't2', 'and the compaction')
+  expect(seen.models[1]).toBe('claude-sonnet-5-5')
+})
+
+test('setting an advisor with /advisor steps routing down to it', async ($, on) => {
+  const setup: Setup = { mode: 'route', level: 4, native: 'claude-sonnet-5-5' }
+  const seen = stubs(on, setup)
+  await start($)
+  await turn($, 't1', 'design a new storage engine')
+  setup.settings = { advisorModel: 'sonnet' }
+  await $.command.run({ command: 'advisor', args: 'sonnet', origin: { kind: 'composer' } })
+  await turn($, 't2', 'and the write-ahead log')
+  expect(seen.models).toEqual(['claude-opus-5-5', 'claude-sonnet-5-5'])
+  expect(seen.toasts.at(-1)).toMatch(/→ Sonnet 5\.5 .* advisor/)
+})
+
+test('an advisor below the session model never runs, so it limits nothing', async ($, on) => {
+  const seen = stubs(on, { mode: 'route', level: 4, settings: { advisorModel: 'sonnet' } })
+  await start($)
+  await turn($, 't1', 'design a new storage engine')
+  expect(seen.models[0]).toBe('claude-opus-5-5')
+  const status = await $.command.run({ command: 'router', args: 'status' })
+  expect(status.text).toMatch(/Advisor: Sonnet, which does not run beside Opus 5\.5, the session's model/)
+})
+
+test('the advisor turned off in the environment is ignored', async ($, on) => {
+  const seen = stubs(on, {
+    mode: 'route',
+    level: 4,
+    settings: { advisorModel: 'sonnet' },
+    native: 'claude-sonnet-5-5',
+    env: { CLOUDFLARE_ACCOUNT_ID: 'acct', CLOUDFLARE_API_TOKEN: 'token', CLAUDE_CODE_DISABLE_ADVISOR_TOOL: '1' },
+  })
+  await start($)
+  await turn($, 't1', 'design a new storage engine')
+  expect(seen.models[0]).toBe('claude-opus-5-5')
+})
+
+test('a turn the advisor weighed in on does not escalate after tool errors', async ($, on) => {
+  const seen = stubs(on, { mode: 'route', level: 1, advisor: true })
+  await start($)
+  await $.turn.start({ turnId: 't1', text: 'rename the helper' })
+  await step($, 't1', 0)
+  for (let i = 0; i < 3; i += 1) await $.tool.call({ tool: 'Bash', command: 'fail' })
+  await step($, 't1', 1)
+  expect(seen.models).toEqual(['claude-haiku-5-5', 'claude-haiku-5-5'])
+  expect(seen.toasts).toEqual([])
+})
+
+test('an advisor seen in use but not in the settings holds routing at the session model', async ($, on) => {
+  const setup: Setup = { mode: 'route', level: 0, native: 'claude-sonnet-5-5' }
+  const seen = stubs(on, setup)
+  await start($)
+  await turn($, 't1', 'where is main?')
+  setup.advisor = true
+  await turn($, 't2', 'and what calls it?')
+  setup.level = 4
+  await turn($, 't3', 'redesign the scheduler')
+  expect(seen.models).toEqual(['claude-haiku-5-5', 'claude-haiku-5-5', 'claude-sonnet-5-5'])
+  const status = await $.command.run({ command: 'router', args: 'status' })
+  expect(status.text).toMatch(/Advisor: on\. Routing stays at sonnet or below/)
 })
 
 test('a model switch names the move and its evidence', async ($, on) => {
@@ -1175,6 +1260,25 @@ test('on: a subagent already at its ceiling stays there after tool errors', asyn
   await subStep($, agentId)
   expect(seen.models).toEqual(['claude-sonnet-5-5'])
   expect(spawnLog(seen)[0].escalated).toBeUndefined()
+})
+
+test('on: a subagent moves up after tool errors only to the advisor, and not once the advisor weighed in', async ($, on) => {
+  const setup: Setup = { mode: 'route', level: 0, settings: { advisorModel: 'claude-opus-4-7' }, native: 'claude-haiku-5-5' }
+  const seen = stubs(on, setup)
+  subagents(on)
+  await start($)
+  await routing($)
+  const first = await spawn($, 'general-purpose', 'rename a variable', onSonnet)
+  for (let i = 0; i < 3; i += 1) await $.tool.call({ tool: 'Bash', command: 'fail', agentId: first.agentId })
+  await subStep($, first.agentId)
+  setup.settings = {}
+  await $.command.run({ command: 'advisor', args: 'off', origin: { kind: 'composer' } })
+  setup.advisor = true
+  const second = await spawn($, 'general-purpose', 'rename another', onSonnet)
+  await subStep($, second.agentId)
+  for (let i = 0; i < 3; i += 1) await $.tool.call({ tool: 'Bash', command: 'fail', agentId: second.agentId })
+  await subStep($, second.agentId)
+  expect(seen.models).toEqual(['claude-haiku-5-5', 'claude-haiku-5-5', 'claude-haiku-5-5'])
 })
 
 test('on: turning it off stops rewriting a running subagent\'s requests', async ($, on) => {

@@ -24,6 +24,34 @@ export function tierOfModel(id: string | null | undefined): Tier | null {
   return TIERS.find((t) => s.includes(t)) ?? null;
 }
 
+/**
+ * Claude Code's advisor pairing table for the models in MODEL_IDS: the oldest version of each family each main model
+ * accepts as its advisor. An advisor must rank at or above the main model, so this changes with MODEL_IDS.
+ */
+const ADVISORS: Record<Tier, Partial<Record<Tier, number>>> = {
+  haiku: { fable: 0, opus: 4.7, sonnet: 5, haiku: 5.5 },
+  sonnet: { fable: 0, opus: 5, sonnet: 5.5 },
+  opus: { fable: 0, opus: 5 },
+  fable: { fable: 5.1 },
+};
+
+/**
+ * The strongest tier whose model accepts `advisor` (an alias or a full id) as its advisor, or null when none does. An
+ * alias resolves to its family's current model, so it counts as the newest version.
+ */
+export function advisorCeiling(advisor: string): Tier | null {
+  const s = advisor.toLowerCase();
+  const family = tierOfModel(s);
+  if (!family) return null;
+  const m = s.match(new RegExp(`${family}-(\\d+)(?:-(\\d{1,2})(?!\\d))?`));
+  const version = m ? Number(m[1]) + Number(m[2] ?? 0) / 10 : Infinity;
+  for (let i = TIERS.length - 1; i >= 0; i -= 1) {
+    const oldest = ADVISORS[TIERS[i]][family];
+    if (oldest !== undefined && version >= oldest) return TIERS[i];
+  }
+  return null;
+}
+
 export function effortFor(tier: Tier, features: Features | null): Effort {
   const base = EFFORTS.indexOf(BASE_EFFORT[tier]);
   const cap = EFFORTS.indexOf(MAX_EFFORT[tier]);

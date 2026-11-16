@@ -11,9 +11,9 @@ import { decide, escalate, initialState, POLICY } from '../src/policy.ts';
 import { accountIdOf, backendOfAnswer, DEFAULT_LOCAL_URL, keyHelp, normalizeUrl, SAMPLE_PROMPT, SETUP_OPTIONS } from '../src/setup.ts';
 import { addUsage, appendSpawn, escalatedTier, isCheaper, kindOf, pickFor, recordOfSpawn, summarize, updateSpawn } from '../src/spawn.ts';
 import type { PickReason, SpawnKind, SpawnMode, SpawnRecord } from '../src/spawn.ts';
-import { requestEffort, routeFor, TIERS, tierOfModel } from '../src/tiers.ts';
+import { advisorCeiling, rank, requestEffort, routeFor, TIERS, tierOfModel } from '../src/tiers.ts';
 import type { Backend, Decision, Features, Mode, PolicyState, Preference, Route, Tier } from '../src/types.ts';
-import { bandText, choiceOf, mainMenu, pinMenu, renderBand, renderPane, switchToast, tuneAdvice, usageText } from '../src/view.ts';
+import { bandText, choiceOf, mainMenu, modelName, pinMenu, renderBand, renderPane, switchToast, tuneAdvice, usageText } from '../src/view.ts';
 import type { Actions, PaneTab, Snapshot } from '../src/view.ts';
 
 type Options = {
@@ -33,7 +33,7 @@ type Options = {
 
 type Advice = { features: Features | null; error: string | null; latencyMs: number | null };
 type SpawnJob = { prompt: string; resolve: (advice: Advice) => void };
-type SpawnRoute = { route: Route; tier: Tier; ceiling: Tier; features: Features | null; toolErrors: number; escalated: boolean };
+type SpawnRoute = { route: Route; tier: Tier; ceiling: Tier; features: Features | null; toolErrors: number; escalated: boolean; advised: boolean };
 // What the router decided before a subagent started. `route` is null when the subagent keeps its usual model.
 type SpawnPlan = {
   kind: SpawnKind;
@@ -109,6 +109,13 @@ let spawnFailures = 0;
 let spawnPausedUntil = 0;
 // The model and effort of each subagent the router set, by id, for its model requests.
 const spawnRoutes = new Map<string, SpawnRoute>();
+// Claude Code's advisor. A main model above its advisor runs without it, so routing stays at or below the advisor's
+// tier. `advisorModel` is the saved setting, read at session start, at each turn's first request and by /router. `advisorSeen` is the strongest
+// tier a request with an advisor call ran on: the only sign of an advisor the setting does not show (--advisor).
+let advisorModel: string | null = null;
+let advisorSeen: Tier | null = null;
+// The turn in which the advisor was last consulted: its guidance stands in for an escalation.
+let advisedTurn: string | null = null;
 
 export function register(on: any, opts: Options) {
   options = opts ?? {};
@@ -133,6 +140,9 @@ export function register(on: any, opts: Options) {
     spawnFailures = 0;
     spawnPausedUntil = 0;
     nativeModel = await $.session.model();
+    await readAdvisor($);
+    advisorSeen = null;
+    advisedTurn = null;
     paused = false;
     choosing = false;
     pin = null;
@@ -169,13 +179,15 @@ export function register(on: any, opts: Options) {
   on('turn.step', async function* ($: any, e: any, next: any) {
     if (e.agentId) {
       const routed = spawnMode === 'on' ? spawnRoutes.get(e.agentId) : undefined;
-      if (routed && routed.toolErrors >= POLICY.escalateAfterErrors && !routed.escalated) await escalateSpawn($, e.agentId, routed);
+      if (routed && routed.toolErrors >= POLICY.escalateAfterErrors && !routed.escalated && !routed.advised) await escalateSpawn($, e.agentId, routed);
       const result = yield* next(routed ? { ...e, model: routed.route.model, effort: requestEffort(routed.route.effort, e.effort) } : e);
       if (result?.usage) spawnLog = updateSpawn(spawnLog, e.agentId, (r) => addUsage(r, result.usage));
+      if (routed && advised(result)) routed.advised = true;
       return result;
     }
     if (mode === 'off' || paused) return yield* next(e);
     if (e.index === 0) {
+      await readAdvisor($);
       const before = current?.route ?? null;
       const job = jobs.get(e.turnId);
       jobs.delete(e.turnId);
@@ -186,8 +198,10 @@ export function register(on: any, opts: Options) {
       const after = current?.route ?? null;
       if (mode === 'route' && before && after && current && before.model !== after.model)
         $.ui.toast(switchToast(labelOf(), before, after, current.decision));
-    } else if (toolErrors >= POLICY.escalateAfterErrors && escalatedTurn !== e.turnId) {
-      const up = escalate(policy, BASELINE, { usedPercent });
+    } else if (toolErrors >= POLICY.escalateAfterErrors && escalatedTurn !== e.turnId && advisedTurn !== e.turnId) {
+      // A turn in which the advisor was consulted keeps its model: the guidance gets the chance a stronger model
+      // would have had, and the prompt cache stays.
+      const up = escalate(policy, BASELINE, { usedPercent }, advisorCap());
       escalatedTurn = e.turnId;
       if (up) {
         const before = current?.route ?? null;
@@ -205,6 +219,7 @@ export function register(on: any, opts: Options) {
         : e;
     const result = yield* next(request);
     readCache(result?.usage);
+    if (advised(result)) noteAdvisor($, e.turnId, result.usage?.model ?? request.model);
     return result;
   });
 
@@ -259,8 +274,17 @@ export function register(on: any, opts: Options) {
     return result;
   });
 
+  // /advisor replaces the advisor, so the one only seen in use no longer counts. The new setting is read where it is
+  // used: Claude Code reloads the settings file only after this hook returns.
+  on('command.run', { command: 'advisor' }, async ($: any, e: any, next: any) => {
+    const result = await next(e);
+    advisorSeen = null;
+    return result;
+  });
+
   on('command.run', { command: 'router' }, async ($: any, e: any) => {
     const args = String(e.args ?? '').trim();
+    await readAdvisor($);
     $.ui.log(`router command args: ${JSON.stringify(e.args ?? null)}`, { to: 'debug' });
     const [verb, arg] = args.split(/\s+/);
     if (verb === 'on' || verb === 'route' || verb === 'watch' || verb === 'off') {
@@ -270,8 +294,10 @@ export function register(on: any, opts: Options) {
     if (verb === 'pin') {
       const tier = TIERS.find((t) => t === arg) ?? null;
       if (!tier) return { text: 'Usage: /router pin haiku | sonnet | opus | fable' };
-      pin = tier;
+      const cap = advisorCap();
+      pin = cap && rank(tier) > rank(cap) ? cap : tier;
       $.ui.invalidate('ui.render');
+      if (pin !== tier) return { text: `The next turn runs on ${pin}: ${tier} would run without the advisor (${advisorText()}).` };
       return { text: `The next turn runs on ${tier}.` };
     }
     if (verb === 'log') return { text: logText(journal, Number(arg) || 10) };
@@ -677,7 +703,7 @@ async function noteSpawn($: any, e: any, result: any, plan: SpawnPlan | null) {
     if (plan) {
       const { advice } = plan;
       spawnLog = appendSpawn(spawnLog, { ...blank, pick: plan.pick, reason: plan.reason, confidence: plan.confidence, activity: plan.activity, latencyMs: advice?.latencyMs ?? null, error: advice?.error ?? null, usual: plan.ceiling, routed: plan.route !== null });
-      if (plan.route && plan.pick && result?.agentId) spawnRoutes.set(result.agentId, { route: plan.route, tier: plan.pick, ceiling: plan.ceiling, features: advice?.features ?? null, toolErrors: 0, escalated: false });
+      if (plan.route && plan.pick && result?.agentId) spawnRoutes.set(result.agentId, { route: plan.route, tier: plan.pick, ceiling: plan.ceiling, features: advice?.features ?? null, toolErrors: 0, escalated: false, advised: false });
     } else if (spawnMode === 'watch') {
       spawnLog = appendSpawn(spawnLog, blank);
       if (blank.reason === 'pending') askAboutSpawn($, id, e.prompt, actual);
@@ -710,7 +736,8 @@ function askAboutSpawn($: any, id: string, prompt: string, actual: Tier | null) 
 // One tier up after repeated tool errors, within the subagent's ceiling, once. A subagent already at its ceiling stays.
 async function escalateSpawn($: any, id: string, routed: SpawnRoute) {
   routed.escalated = true;
-  const tier = escalatedTier(routed.tier, routed.ceiling);
+  const cap = advisorCap();
+  const tier = escalatedTier(routed.tier, cap && rank(cap) < rank(routed.ceiling) ? cap : routed.ceiling);
   if (!tier) return;
   const route = await routeOf($, tier, routed.features);
   if (!route) return;
@@ -861,6 +888,7 @@ async function decideTurn($: any, advice: Advice) {
     preference,
     minConfidence: typeof options.min_confidence === 'number' ? options.min_confidence : 0.45,
     baseline: BASELINE,
+    advisor: advisorCap(),
   });
   policy = decision.state;
   lastError = advice.error;
@@ -869,10 +897,13 @@ async function decideTurn($: any, advice: Advice) {
   await record($, decision, f, advice.latencyMs, advice.error);
 }
 
-// A pin serves one turn and leaves the policy's tier where it was, as in claude-router.
-async function pinTurn($: any, tier: Tier) {
+// A pin serves one turn and leaves the policy's tier where it was, as in claude-router. It stays at or below the
+// advisor's tier, as routing does.
+async function pinTurn($: any, pinned: Tier) {
   await readUsage($);
   pin = null;
+  const cap = advisorCap();
+  const tier = cap && rank(pinned) > rank(cap) ? cap : pinned;
   const decision: Decision = { tier, reason: 'pinned', distribution: null, bar: null, mass: null, state: policy };
   current = { decision, route: await routeOf($, tier, null), features: null };
   await record($, decision, null, null, null);
@@ -881,6 +912,26 @@ async function pinTurn($: any, tier: Tier) {
 async function record($: any, decision: Decision, f: Features | null, latencyMs: number | null, error: string | null) {
   journal = append(journal, recordOf({ at: Date.now(), mode, decision, features: f, usedPercent, windows, latencyMs, error }));
   await $.store.set(JOURNAL_KEY, journal);
+}
+
+// The saved advisor, or null without one or with the advisor tool turned off.
+async function readAdvisor($: any) {
+  advisorModel = null;
+  try {
+    if (await $.env.get('CLAUDE_CODE_DISABLE_ADVISOR_TOOL')) return;
+    const value = (await $.settings.read())?.advisorModel;
+    if (typeof value === 'string' && value.trim() && value.trim() !== 'off') advisorModel = value.trim();
+  } catch {}
+}
+
+// A response with an advisor call: the advisor is on for that model's tier, whatever the setting said.
+function noteAdvisor($: any, turnId: string, model: string) {
+  advisedTurn = turnId;
+  const tier = tierOfModel(model);
+  if (tier && (!advisorSeen || rank(tier) > rank(advisorSeen))) {
+    advisorSeen = tier;
+    $.ui.invalidate('ui.render');
+  }
 }
 
 async function routeOf($: any, tier: Tier, f: Features | null): Promise<Route | null> {
@@ -893,6 +944,30 @@ async function routeOf($: any, tier: Tier, f: Features | null): Promise<Route | 
 }
 
 // --- Plain functions ---
+
+const advised = (result: any): boolean => Array.isArray(result?.serverToolUses) && result.serverToolUses.some((u: any) => u?.name === 'advisor');
+
+/**
+ * The strongest tier the advisor applies to, or null when no advisor is active. Claude Code attaches the advisor by the
+ * session's own model, not the one a request is routed to: an advisor below that model never runs and limits nothing,
+ * and one at or above it goes out with every request, where the API refuses it beside a stronger model and leaves it
+ * off until /clear. An advisor seen in use but not in the settings (the --advisor flag) is at least as strong as the
+ * tier it ran on and as the session's model.
+ */
+function advisorCap(): Tier | null {
+  const set = advisorModel ? advisorCeiling(advisorModel) : null;
+  const native = tierOfModel(nativeModel);
+  const active = set && (!native || rank(set) >= rank(native)) ? set : null;
+  const seen = advisorSeen && !advisorModel ? higher(advisorSeen, native) : advisorSeen;
+  return higher(active, seen);
+}
+
+const higher = (a: Tier | null, b: Tier | null): Tier | null => (a && b ? (rank(a) >= rank(b) ? a : b) : (a ?? b));
+
+/** "Opus", "Opus 4.7", or "on" for an advisor seen in use but not in the settings. */
+function advisorText(): string {
+  return advisorModel ? modelName(advisorModel) : 'on';
+}
 
 function endpointOf(account?: string | null) {
   return endpointFor({
@@ -933,6 +1008,7 @@ function timeoutOf(endpoint: Endpoint): number {
 
 function snapshot(): Snapshot {
   const endpoint = endpointOf(options.cloudflare_account_id || 'unset');
+  const cap = advisorCap();
   return {
     mode,
     paused,
@@ -952,6 +1028,7 @@ function snapshot(): Snapshot {
     preference: options.preference ?? 'balanced',
     fable: options.allow_fable === true,
     detail,
+    advisor: cap ? { name: advisorText(), cap } : null,
   };
 }
 
@@ -986,6 +1063,11 @@ function statusText(): string {
   return [
     `${bandText(s)}${usage ? ` · ${usage}` : ''}`,
     `Mode: ${mode}${paused ? ' (paused for this session)' : ''}. Decision model: ${s.label} (${backendOf(overrides.backend ?? options.backend)}). Preference: ${s.preference}. Fable: ${s.fable ? 'allowed' : 'off'}.`,
+    s.advisor
+      ? `Advisor: ${s.advisor.name}. Routing stays at ${s.advisor.cap} or below, where the advisor still applies.`
+      : advisorModel
+        ? `Advisor: ${advisorText()}, which does not run beside ${modelName(nativeModel)}, the session's model, so routing is not limited by it.`
+        : '',
     lastError ? `Last decision model error: ${lastError}\nRun /router setup to change the decision model, or /router test to try it.` : '',
     HELP,
   ]

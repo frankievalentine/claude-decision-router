@@ -58,6 +58,15 @@ export function usageCap(h: PlanUsage): Tier {
   return 'fable';
 }
 
+/**
+ * The most expensive tier allowed now: the plan-usage cap, lowered to `advisor`, the strongest tier the session's
+ * advisor still applies to. A main model above its advisor runs without it.
+ */
+export function capOf(h: PlanUsage, advisor: Tier | null = null): Tier {
+  const cap = usageCap(h);
+  return advisor && rank(advisor) < rank(cap) ? advisor : cap;
+}
+
 export function cacheShift(contextTokens: number | null): number {
   if (!contextTokens || contextTokens <= 0) return 0;
   return POLICY.cacheSlope * (contextTokens / (contextTokens + POLICY.cachePivotTokens));
@@ -86,11 +95,13 @@ export type DecideInput = {
   preference: Preference;
   minConfidence: number;
   baseline: Tier;
+  /** The strongest tier the session's advisor applies to, or null without an advisor. */
+  advisor?: Tier | null;
 };
 
 export function decide(input: DecideInput): Decision {
   const { state, distribution: dist, usage } = input;
-  const cap = usageCap(usage);
+  const cap = capOf(usage, input.advisor);
   const incumbent = state.tier ?? input.baseline;
   const out = (
     tier: Tier,
@@ -107,8 +118,10 @@ export function decide(input: DecideInput): Decision {
     state: { ...next, tier },
   });
 
-  // Over the cap (the plan filled up while a tier ran): step down to the cap whatever the advice says.
-  if (state.tier && rank(state.tier) > rank(cap)) return out(cap, 'usage-cap', { ...state, votes: [] });
+  // Over the cap (the plan filled up, or an advisor was set, while a tier ran): step down to the cap whatever the
+  // advice says.
+  if (state.tier && rank(state.tier) > rank(cap))
+    return out(cap, cap === usageCap(usage) ? 'usage-cap' : 'advisor-cap', { ...state, votes: [] });
   if (!dist) return out(capped(incumbent, cap), 'no-advice', state);
   if (input.confidence < input.minConfidence) return out(capped(incumbent, cap), 'low-confidence', state);
 
@@ -148,11 +161,14 @@ export function decide(input: DecideInput): Decision {
   return out(incumbent, 'stay', next, bar, atOrBelow(dist, choice));
 }
 
-/** One tier up after repeated failures, within the plan-usage cap, then a hold so the stronger model gets a chance. */
-export function escalate(state: PolicyState, baseline: Tier, usage: PlanUsage): Decision | null {
+/**
+ * One tier up after repeated failures, within the plan-usage cap and the advisor's tier, then a hold so the stronger
+ * model gets a chance.
+ */
+export function escalate(state: PolicyState, baseline: Tier, usage: PlanUsage, advisor: Tier | null = null): Decision | null {
   const current = state.tier ?? baseline;
   const target = TIERS[rank(current) + 1];
-  if (!target || rank(target) > rank(usageCap(usage))) return null;
+  if (!target || rank(target) > rank(capOf(usage, advisor))) return null;
   return {
     tier: target,
     reason: 'escalation',

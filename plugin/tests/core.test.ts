@@ -3,10 +3,10 @@ import { backendOf, confidenceOf, endpointFor, hostOf, parseAnswers, warmupBody 
 import { mostLikely, tierConfidence, tierDistribution } from '../src/features.ts'
 import { append, markOverride, recordOf, tune } from '../src/journal.ts'
 import type { JournalRecord } from '../src/journal.ts'
-import { decide, escalate, usageCap, initialState } from '../src/policy.ts'
+import { capOf, decide, escalate, usageCap, initialState } from '../src/policy.ts'
 import type { DecideInput } from '../src/policy.ts'
 import { appendSpawn, escalatedTier, isCheaper, kindOf, MAX_SPAWN_RECORDS, pickFor, recordOfSpawn, summarize } from '../src/spawn.ts'
-import { routeFor, tierOfModel } from '../src/tiers.ts'
+import { advisorCeiling, routeFor, tierOfModel } from '../src/tiers.ts'
 import type { Features, Tier } from '../src/types.ts'
 
 // A features object with difficulty concentrated on `level` (0-4).
@@ -117,6 +117,31 @@ test('plan usage caps the top tier and raises the bar', async () => {
   expect(decide(input({ state, distribution: dist(features(3)), usage: { usedPercent: 97 } })).reason).toBe(
     'usage-cap',
   )
+})
+
+test('an advisor sets the highest tier its pairing allows', async () => {
+  expect(advisorCeiling('fable')).toBe('fable')
+  expect(advisorCeiling('claude-fable-5')).toBe('opus')
+  expect(advisorCeiling('opus')).toBe('opus')
+  expect(advisorCeiling('claude-opus-5-5')).toBe('opus')
+  expect(advisorCeiling('claude-opus-4-7')).toBe('haiku')
+  expect(advisorCeiling('sonnet')).toBe('sonnet')
+  expect(advisorCeiling('claude-sonnet-5')).toBe('haiku')
+  expect(advisorCeiling('claude-sonnet-4-6-20250929')).toBe(null)
+  expect(advisorCeiling('claude-haiku-5-5')).toBe('haiku')
+  expect(advisorCeiling('claude-haiku-4-5')).toBe(null)
+  expect(advisorCeiling('something-else')).toBe(null)
+})
+
+test('routing stays at or below the advisor, and says so when it has to step down', async () => {
+  expect(capOf({ usedPercent: 10 }, 'sonnet')).toBe('sonnet')
+  expect(capOf({ usedPercent: 97 }, 'opus')).toBe('sonnet')
+  expect(decide(input({ distribution: dist(features(4)), advisor: 'opus' })).tier).toBe('opus')
+  expect(decide(input({ distribution: dist(features(4)), advisor: 'sonnet' })).tier).toBe('sonnet')
+  const state = { tier: 'opus' as Tier, votes: [], hold: 0 }
+  expect(decide(input({ state, distribution: dist(features(3)), advisor: 'sonnet' })).reason).toBe('advisor-cap')
+  expect(escalate({ tier: 'sonnet', votes: [], hold: 0 }, 'sonnet', { usedPercent: 10 }, 'sonnet')).toBe(null)
+  expect(escalate({ tier: 'haiku', votes: [], hold: 0 }, 'sonnet', { usedPercent: 10 }, 'sonnet')?.tier).toBe('sonnet')
 })
 
 test('low confidence and no advice keep the current tier', async () => {

@@ -60,6 +60,7 @@ export type Reason =
   | 'no-advice'
   | 'escalation'
   | 'usage-cap'
+  | 'advisor-cap'
   | 'pinned';
 
 export type Decision = {

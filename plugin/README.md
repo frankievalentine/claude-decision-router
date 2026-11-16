@@ -38,6 +38,10 @@ A decision model (Cloudflare's Clef or TypeSafe's Jev) **describes** each task: 
 - **Fable** (off by default) is used only when the decision model rates a task very hard, never for security-sensitive work, and not past 75% usage. It may bill to usage credits.
 - **Security-sensitive work** runs on Sonnet or above.
 - **Fails open.** A missing key, a dead server, a timeout or a low-confidence answer leaves your current model alone. Three failures in a row pause the decision model for a minute.
+- **The advisor.** Claude Code's [advisor](https://code.claude.com/docs/en/advisor) only works with a main model at or below it, and a main model above it runs without one. With `advisorModel` set, routing, pins and escalations stay at the strongest tier your advisor still applies to: Opus or below for an Opus advisor, Sonnet or below for a Sonnet one. The router reads the setting at session start, before each turn and on `/router`, so a change with `/advisor` applies from the next turn. It ignores it when `CLAUDE_CODE_DISABLE_ADVISOR_TOOL` is set, and shows it on the band, the pane and `/router status`.
+  - Claude Code checks the advisor against the session's own model, not the one a turn is routed to. An advisor below the session's model never runs, so it limits nothing; `/router status` says so.
+  - A turn in which the advisor was consulted does not move up after three tool errors: its guidance gets that chance, and the prompt cache stays.
+  - An advisor set with `claude --advisor` is not in the settings, so the router learns of it only once Claude consults it. From then on routing stays at or below the tier that request ran on or the session's own model, whichever is higher.
 
 ## Install
 
@@ -125,7 +129,7 @@ Set `backend` to `local`, `local_url` to `http://127.0.0.1:30000/v1/systemone`, 
 - `/router test`: send one request to the configured decision model and report the answer or the fault
 - `/router status`: the status as text, with the last decision-model error
 - `/router route | watch | off | on`: change the mode (remembered across sessions)
-- `/router pin haiku | sonnet | opus | fable`: run the next turn on that tier
+- `/router pin haiku | sonnet | opus | fable`: run the next turn on that tier, or on the advisor's tier if that is lower
 - `/router log [n]`: the last decisions, with difficulty, confidence and corrections, and `leaned` where the decision model pointed at a different tier than the one used
 - `/router subagents`: what the router did for each subagent (see Routing subagents)
 - `/router subagents on | watch | off`: set the model of subagents, only record the picks, or leave subagents out (remembered across sessions)
@@ -146,7 +150,7 @@ Without this, the router leaves subagents alone, and each one uses the model nam
 - **It only moves down.** A subagent never goes above the model it would have used anyway, and never to Fable. The plan-usage caps and the Sonnet floor for security-sensitive work apply as they do for main turns.
 - **The router picks the model, not the subagent.** Claude still decides whether to delegate and to which subagent.
 - **A subagent waits at most one timeout** for the decision model (2.5 seconds hosted, 8 seconds local), then starts on its usual model. Questions go one at a time, and past eight waiting the rest start without asking. A server that stops answering stops holding subagents after three failures, for a minute at a time. With `watch`, nothing waits.
-- **Three tool errors** move a subagent up one tier, within the same limit, once.
+- **Three tool errors** move a subagent up one tier, within the same limit and the advisor's tier, once, unless the advisor was consulted.
 - **`CLAUDE_CODE_SUBAGENT_MODEL_FORCE`** turns this off, since that setting has already decided.
 
 **Turning this on sends more text out.** The task text of each general subagent goes to your decision model, as main prompts do. With a hosted backend that means Cloudflare or TypeSafe, and task text often includes code and project details. With llama.cpp or Unsloth it stays on your server. The subagent log holds labels and numbers only.

@@ -38,6 +38,8 @@ export type Snapshot = {
   fable: boolean;
   /** The band's second row. */
   detail: boolean;
+  /** Claude Code's advisor, by name, and the strongest tier it applies to; null without one. */
+  advisor?: { name: string; cap: Tier } | null;
 };
 
 export type Actions = {
@@ -94,6 +96,7 @@ const SHORT_REASON: Record<string, string> = {
   'no-advice': '= no advice',
   escalation: '↑ tool errors',
   'usage-cap': '↓ plan usage',
+  'advisor-cap': '↓ advisor',
   pinned: '⏵ pinned',
 };
 const LONG_REASON: Record<string, string> = {
@@ -108,6 +111,7 @@ const LONG_REASON: Record<string, string> = {
   'no-advice': 'no answer from the decision model, so the model stays',
   escalation: 'repeated tool errors moved it up',
   'usage-cap': 'plan usage is high: capped to a cheaper tier',
+  'advisor-cap': 'kept at or below the advisor, so the advisor still applies',
   pinned: 'pinned for this turn',
 };
 
@@ -307,6 +311,7 @@ export function bandSegments(s: Snapshot, a: Actions): Segment[] {
       segment(0, meter(null), part(` ${s.mode === 'watch' ? 'Watching' : 'Routing on'} · ready`, { dimColor: true })),
       pin,
       segment(5, part(preferenceText(s), { dimColor: true })),
+      advisorSegment(s),
       ...readings(s),
     ].filter(Boolean) as Segment[];
 
@@ -334,10 +339,13 @@ export function bandSegments(s: Snapshot, a: Actions): Segment[] {
     pin,
     segment(1, part(reasonText(decision), { dimColor: true })),
     segment(5, part(preferenceText(s), { dimColor: true })),
+    advisorSegment(s),
     support ? segment(4, part(support, { dimColor: true })) : null,
     ...readings(s),
   ].filter(Boolean) as Segment[];
 }
+
+const advisorSegment = (s: Snapshot) => (s.advisor ? segment(4, part(`advisor ${s.advisor.name}`, { dimColor: true })) : null);
 
 const preferenceText = (s: Snapshot) => `${s.preference}${s.preference === 'balanced' ? ' (default)' : ''}`;
 
@@ -550,6 +558,7 @@ export function renderPane(el: Elements, s: Snapshot, tab: PaneTab, a: Actions, 
         );
     }
     rows.push(field('Mode', t(`${s.mode}${s.paused ? ' (paused)' : ''} · ${preferenceText(s)} · Fable ${s.fable ? 'allowed' : 'off'}`)));
+    if (s.advisor) rows.push(field('Advisor', t(`${s.advisor.name} · routes up to ${s.advisor.cap}`)));
     rows.push(
       buttons(
         'Band',

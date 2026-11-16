@@ -46,6 +46,8 @@ Every time you send a prompt, the router picks a model before Claude answers:
 
 The router is careful about switching. It won't flip on one answer, and it holds back when the switch would throw away a long cached conversation. It also uses cheaper models as your 5-hour and weekly limits fill up. If the decision model can't be reached or isn't sure, your current model stays.
 
+**The advisor.** If you use Claude Code's `/advisor`, the router never picks a model stronger than your advisor, since that model would run without it. A turn where Claude already consulted the advisor doesn't also move up a tier after repeated tool errors.
+
 **Subagents.** When Claude hands work to a subagent, that subagent doesn't follow the pick above. It runs on the model you started the session with. Turn on `/router subagents on` and the router picks for subagents too: file searches run on Haiku, general tasks go through the same decision model, and everything else is left alone. A subagent never gets a stronger model than it would have had anyway, so this only moves work to cheaper models.
 
 You stay in control: `/model` pauses the router, and `/router pin opus` sets the next turn's model.
