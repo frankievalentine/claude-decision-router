@@ -1,6 +1,6 @@
-# Decision Router
+<p align="center"><img src="plugin/docs/icon.png" alt="Decision Router icon" width="128"></p>
 
-<img src="plugin/.claude-plugin/icon.png" alt="Decision Router icon" width="96" align="right">
+# Decision Router
 
 A Claude Code plugin that picks the Claude model for each turn, and for the subagents Claude starts if you turn that on, so your subscription goes further without you choosing models by hand.
 

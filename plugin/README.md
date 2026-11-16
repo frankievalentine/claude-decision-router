@@ -1,3 +1,5 @@
+![Decision Router](docs/icon.png)
+
 # Decision Router
 
 Decision Router picks the right Claude model for every message you send in Claude Code, so your plan lasts longer and you never have to switch models yourself.
