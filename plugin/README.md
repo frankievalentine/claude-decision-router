@@ -18,10 +18,12 @@ It's careful about switching. It won't change models on a single message, it sta
 
 ## Getting started
 
-1. Install Decision Router. In Claude Code, run `/plugin marketplace add frankievalentine/claude-decision-router`, then `/plugin install decision-router@decision-router-local`. In the desktop app, open Customize > Plugins, add the marketplace `frankievalentine/claude-decision-router`, then add Decision Router.
+1. Install Decision Router. In Claude Code, run `/plugin install decision-router --marketplace frankievalentine/claude-decision-router`, which adds the marketplace and installs the plugin in one step. In the desktop app, open Customize > Plugins, add the marketplace `frankievalentine/claude-decision-router`, then add Decision Router.
 2. Run `/router setup` and choose where the decision model runs: on a hosted service (Cloudflare or TypeSafe) or on your own computer (llama.cpp, Unsloth or SGLang). Add any key it needs in the plugin's settings.
 3. Use it as usual. It starts in **Watch only** mode: it shows what it would pick and changes nothing.
 4. When the picks look right, run `/router route` to let it switch models for you.
+
+To get each new version automatically, turn on auto-update: run `/plugin`, open **Marketplaces**, select `decision-router-local`, then **Enable auto-update**. It's off by default.
 
 Type `/router` at any time for a quick menu: switch modes, choose the model for your next message, or open **Status and settings**.
 

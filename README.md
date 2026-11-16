@@ -8,14 +8,15 @@ A Claude Code plugin that picks the Claude model for each message, so your subsc
 
 ## Install
 
-In Claude Code (2.1.299 or later):
+In Claude Code (2.1.299 or later), one command adds the marketplace and installs the plugin:
 
 ```
-/plugin marketplace add frankievalentine/claude-decision-router
-/plugin install decision-router@decision-router-local
+/plugin install decision-router --marketplace frankievalentine/claude-decision-router
 ```
 
 In the Claude desktop app: Customize > Plugins, add the marketplace `frankievalentine/claude-decision-router`, then add Decision Router.
+
+To get each new version automatically, turn on auto-update: run `/plugin`, open **Marketplaces**, select `decision-router-local`, then **Enable auto-update**. It's off by default.
 
 ## Set up
 
@@ -65,7 +66,7 @@ Your prompt goes to the decision model you choose: it stays on your server with 
 
 ## More
 
-- **Update:** `claude plugin marketplace update decision-router-local`, then `claude plugin update decision-router@decision-router-local`, then restart Claude Code.
+- **Update:** with auto-update on, new versions arrive on their own. Otherwise run `claude plugin update decision-router@decision-router-local` in your shell, or `/plugin marketplace update decision-router-local` in a session, then `/reload-plugins`.
 - **Reference:** [plugin/docs/REFERENCE.md](plugin/docs/REFERENCE.md) covers the switching policy, every decision model (including SGLang), every setting and the source layout.
 - **Develop:** run `claude --plugin-dir ./plugin`, which hot-reloads your edits. In `plugin/`, `claude plugin test` runs the tests and `claude plugin validate .` checks the plugin; `scripts/render-docs.sh` regenerates the terminal screenshots. Bump the version in `plugin/.claude-plugin/plugin.json` with each change, because `claude plugin update` compares versions.
 

@@ -51,12 +51,12 @@ A decision model (Cloudflare's Clef or TypeSafe's Jev) **describes** each task: 
 The repository holds a one-plugin marketplace, so Claude Code prompts for your settings on install and stores the keys in your system's secure credential store.
 
 1. Add the marketplace in Claude Code, from a clone (`git clone https://github.com/frankievalentine/claude-decision-router.git ~/claude-decision-router`, then `/plugin marketplace add ~/claude-decision-router`) or straight from GitHub (`/plugin marketplace add frankievalentine/claude-decision-router`).
-2. Then: `/plugin install decision-router@decision-router-local`.
+2. Then: `/plugin install decision-router@decision-router-local`. From GitHub, one command does both: `/plugin install decision-router --marketplace frankievalentine/claude-decision-router`.
 3. Run `/router setup`: pick a decision model, and it finds your server (or asks for its address), tests it and saves the settings. It never asks for a key in the dialog, because what you type there stays in the scrollback: keys go in the plugin's masked settings fields (see Settings and keys).
 4. Use **Watch only** mode for a few days: the band shows what the router would pick and why, and nothing changes.
 5. When the picks look right: `/router route`.
 
-A clone is read in place: after `git pull`, `/reload-plugins` picks up the change. A GitHub install runs its own copy: `claude plugin marketplace update decision-router-local`, then `claude plugin update decision-router@decision-router-local`.
+A clone is read in place: after `git pull`, `/reload-plugins` picks up the change. A GitHub install runs its own copy: `claude plugin update decision-router@decision-router-local` fetches a new version, or turn on auto-update under **Marketplaces** in `/plugin` (select `decision-router-local`, then **Enable auto-update**) to get each one on its own.
 
 Requires Claude Code 2.1.299 or later (per-request model changes, and the `weight` and `tabular` text styles the band uses). Developed and tested with 2.1.317.
 
