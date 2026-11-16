@@ -72,7 +72,7 @@ export function tierDistribution(
     dist[tier] += p / total;
   });
   // Fable is the most expensive tier and may bill to usage credits: it needs a clear "very hard" answer, and it is
-  // never used for security-sensitive work (Fable 5.1 carries extra safety measures for cybersecurity).
+  // never used for security-sensitive work (Fable carries extra safety measures for cybersecurity).
   const veryHard = (f.difficulty[4] ?? 0) / total;
   if (!settings.allowFable || veryHard < w.fableMinVeryHard || f.security >= 0.5) {
     dist.opus += dist.fable;

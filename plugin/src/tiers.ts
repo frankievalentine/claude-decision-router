@@ -7,7 +7,7 @@ export const MODEL_IDS: Record<Tier, string> = {
   haiku: 'claude-haiku-5-5',
   sonnet: 'claude-sonnet-5-5',
   opus: 'claude-opus-5-5',
-  fable: 'claude-fable-5-1',
+  fable: 'claude-fable-5-2',
 };
 
 export const TIER_NAMES: Record<Tier, string> = { haiku: 'Haiku', sonnet: 'Sonnet', opus: 'Opus', fable: 'Fable' };
@@ -42,7 +42,7 @@ const ADVISORS: Record<Tier, Partial<Record<Tier, number>>> = {
   haiku: { fable: 0, opus: 4.7, sonnet: 5, haiku: 5.5 },
   sonnet: { fable: 0, opus: 5, sonnet: 5.5 },
   opus: { fable: 0, opus: 5 },
-  fable: { fable: 5.1 },
+  fable: { fable: 5.2 },
 };
 
 /**

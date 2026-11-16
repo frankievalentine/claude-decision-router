@@ -130,7 +130,7 @@ Set **Decision model** to Unsloth or SGLang server, **Server address** to `http:
 |---|---|
 | Mode | Watch only (show the pick, change nothing), Switch models, or Off. `/router` changes it too |
 | Priority | Save usage, Balanced or Best answers: how readily the router reaches for a stronger model |
-| Use Fable | Lets very hard, non-security tasks run on Fable 5.1, which may bill to usage credits. The switch in Status and settings changes it too, and works in the desktop app, where a session cannot save plugin settings: the switch is kept in the plugin's storage, and the latest change, the switch or this setting, wins |
+| Use Fable | Lets very hard, non-security tasks run on Fable 5.2, which may bill to usage credits. The switch in Status and settings changes it too, and works in the desktop app, where a session cannot save plugin settings: the switch is kept in the plugin's storage, and the latest change, the switch or this setting, wins |
 | Decision model | Where the decision model runs (see Backends) |
 | Server address, Server key | For llama.cpp, Unsloth or SGLang |
 | Cloudflare account ID, Cloudflare API token | For Cloudflare Workers AI |

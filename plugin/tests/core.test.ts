@@ -135,6 +135,9 @@ test('plan usage caps the top tier and raises the bar', async () => {
 test('an advisor sets the highest tier its pairing allows', async () => {
   expect(advisorCeiling('fable')).toBe('fable')
   expect(advisorCeiling('claude-fable-5')).toBe('opus')
+  // Fable 5.2 ranks above Fable 5.1, so only a Fable 5.2 advisor goes with a Fable turn.
+  expect(advisorCeiling('claude-fable-5-1')).toBe('opus')
+  expect(advisorCeiling('claude-fable-5-2')).toBe('fable')
   expect(advisorCeiling('opus')).toBe('opus')
   expect(advisorCeiling('claude-opus-5-5')).toBe('opus')
   expect(advisorCeiling('claude-opus-4-7')).toBe('haiku')
