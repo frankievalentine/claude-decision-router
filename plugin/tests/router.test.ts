@@ -35,6 +35,9 @@ type Setup = {
   advisor?: boolean
 }
 
+// The settings most tests run with: Cloudflare, with an account ID and a token saved.
+const KEYS = { options: { cloudflare_account_id: 'acct', cloudflare_api_token: 'token' } }
+
 // Registers every stub a session needs. Returns what the test reads back.
 function stubs(on: any, setup: Setup) {
   const seen = {
@@ -52,7 +55,7 @@ function stubs(on: any, setup: Setup) {
     closed: [] as unknown[],
   }
   const clock = mock.clock(on)
-  mock.env(on, setup.env ?? { CLOUDFLARE_ACCOUNT_ID: 'acct', CLOUDFLARE_API_TOKEN: 'token' })
+  mock.env(on, setup.env ?? {})
   if (setup.mode) seen.store.set('decision-router:mode', setup.mode)
   on('store.get', ($: any, e: any) => ({ value: seen.store.get(e.key) }))
   on('store.set', ($: any, e: any) => {
@@ -167,7 +170,7 @@ const engineDraws = (on: any) => on('ui.render', () => ({ type: 'Text', props: {
 
 // --- Routing ---
 
-test('route mode sends an easy task to Haiku and a very hard one straight to Opus', async ($, on) => {
+test('route mode sends an easy task to Haiku and a very hard one straight to Opus', KEYS, async ($, on) => {
   const setup: Setup = { mode: 'route', level: 0 }
   const seen = stubs(on, setup)
   await start($)
@@ -179,7 +182,7 @@ test('route mode sends an easy task to Haiku and a very hard one straight to Opu
   expect(seen.efforts[1]).toBe('xhigh')
 })
 
-test('the request asks every question in one call, without naming a model', async ($, on) => {
+test('the request asks every question in one call, without naming a model', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', level: 2 })
   await start($)
   await turn($, 't1', 'add a retry to the uploader')
@@ -191,7 +194,7 @@ test('the request asks every question in one call, without naming a model', asyn
   expect(body.model).toBeUndefined()
 })
 
-test('watch mode changes nothing but shows the pick', async ($, on) => {
+test('watch mode changes nothing but shows the pick', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'watch', level: 0 })
   await start($)
   await turn($, 't1', 'list the files')
@@ -200,7 +203,7 @@ test('watch mode changes nothing but shows the pick', async ($, on) => {
   expect(status.text).toMatch(/^haiku exploring → Haiku 5\.5 · low · watch only · • first pick/)
 })
 
-test('a continuation turn asks nothing and keeps the route', async ($, on) => {
+test('a continuation turn asks nothing and keeps the route', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', level: 3 })
   await start($)
   await turn($, 't1', 'fix the flaky integration test')
@@ -209,14 +212,14 @@ test('a continuation turn asks nothing and keeps the route', async ($, on) => {
   expect(seen.models).toEqual(['claude-opus-5-5', 'claude-opus-5-5'])
 })
 
-test('near the plan limit the top tier is capped', async ($, on) => {
+test('near the plan limit the top tier is capped', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', level: 4, usage: 97 })
   await start($)
   await turn($, 't1', 'design a new storage engine')
   expect(seen.models[0]).toBe('claude-sonnet-5-5')
 })
 
-test('ultrathink keeps its xhigh effort on a routed turn', async ($, on) => {
+test('ultrathink keeps its xhigh effort on a routed turn', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', level: 2 })
   await start($)
   await $.turn.start({ turnId: 't1', text: 'ultrathink about this refactor' })
@@ -225,7 +228,7 @@ test('ultrathink keeps its xhigh effort on a routed turn', async ($, on) => {
   expect(seen.efforts[0]).toBe('xhigh')
 })
 
-test('repeated tool errors escalate mid-turn', async ($, on) => {
+test('repeated tool errors escalate mid-turn', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', level: 1 })
   await start($)
   await $.turn.start({ turnId: 't1', text: 'rename the helper' })
@@ -238,7 +241,7 @@ test('repeated tool errors escalate mid-turn', async ($, on) => {
 
 // --- The advisor ---
 
-test('an advisor in the settings keeps routing and pins at or below it, and the status names it', async ($, on) => {
+test('an advisor in the settings keeps routing and pins at or below it, and the status names it', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', level: 4, settings: { advisorModel: 'sonnet' }, native: 'claude-sonnet-5-5' })
   await start($)
   await turn($, 't1', 'design a new storage engine')
@@ -251,7 +254,7 @@ test('an advisor in the settings keeps routing and pins at or below it, and the 
   expect(seen.models[1]).toBe('claude-sonnet-5-5')
 })
 
-test('setting an advisor with /advisor steps routing down to it', async ($, on) => {
+test('setting an advisor with /advisor steps routing down to it', KEYS, async ($, on) => {
   const setup: Setup = { mode: 'route', level: 4, native: 'claude-sonnet-5-5' }
   const seen = stubs(on, setup)
   await start($)
@@ -263,7 +266,7 @@ test('setting an advisor with /advisor steps routing down to it', async ($, on) 
   expect(seen.toasts.at(-1)).toMatch(/→ Sonnet 5\.5 .* advisor/)
 })
 
-test('an advisor below the session model never runs, so it limits nothing', async ($, on) => {
+test('an advisor below the session model never runs, so it limits nothing', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', level: 4, settings: { advisorModel: 'sonnet' } })
   await start($)
   await turn($, 't1', 'design a new storage engine')
@@ -272,20 +275,20 @@ test('an advisor below the session model never runs, so it limits nothing', asyn
   expect(status.text).toMatch(/Advisor: Sonnet, which does not run beside Opus 5\.5, the session's model/)
 })
 
-test('the advisor turned off in the environment is ignored', async ($, on) => {
+test('the advisor turned off in the environment is ignored', KEYS, async ($, on) => {
   const seen = stubs(on, {
     mode: 'route',
     level: 4,
     settings: { advisorModel: 'sonnet' },
     native: 'claude-sonnet-5-5',
-    env: { CLOUDFLARE_ACCOUNT_ID: 'acct', CLOUDFLARE_API_TOKEN: 'token', CLAUDE_CODE_DISABLE_ADVISOR_TOOL: '1' },
+    env: { CLAUDE_CODE_DISABLE_ADVISOR_TOOL: '1' },
   })
   await start($)
   await turn($, 't1', 'design a new storage engine')
   expect(seen.models[0]).toBe('claude-opus-5-5')
 })
 
-test('a turn the advisor weighed in on does not escalate after tool errors', async ($, on) => {
+test('a turn the advisor weighed in on does not escalate after tool errors', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', level: 1, advisor: true })
   await start($)
   await $.turn.start({ turnId: 't1', text: 'rename the helper' })
@@ -296,7 +299,7 @@ test('a turn the advisor weighed in on does not escalate after tool errors', asy
   expect(seen.toasts).toEqual([])
 })
 
-test('an advisor seen in use but not in the settings holds routing at the session model', async ($, on) => {
+test('an advisor seen in use but not in the settings holds routing at the session model', KEYS, async ($, on) => {
   const setup: Setup = { mode: 'route', level: 0, native: 'claude-sonnet-5-5' }
   const seen = stubs(on, setup)
   await start($)
@@ -310,7 +313,7 @@ test('an advisor seen in use but not in the settings holds routing at the sessio
   expect(status.text).toMatch(/Advisor: on\. Routing stays at sonnet or below/)
 })
 
-test('a model switch names the move and its evidence', async ($, on) => {
+test('a model switch names the move and its evidence', KEYS, async ($, on) => {
   const setup: Setup = { mode: 'route', level: 0 }
   const seen = stubs(on, setup)
   await start($)
@@ -320,7 +323,7 @@ test('a model switch names the move and its evidence', async ($, on) => {
   expect(seen.toasts[0]).toMatch(/^Model changed: Haiku 5\.5 · low → Opus 5\.5 · xhigh · jump \(Clef Flash \d+% ≥ \d+%\)$/)
 })
 
-test('a pin serves one turn without asking the decision model', async ($, on) => {
+test('a pin serves one turn without asking the decision model', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', level: 0 })
   await start($)
   await turn($, 't1', 'where is main?')
@@ -331,7 +334,7 @@ test('a pin serves one turn without asking the decision model', async ($, on) =>
   expect(seen.models).toEqual(['claude-haiku-5-5', 'claude-opus-5-5', 'claude-haiku-5-5'])
 })
 
-test('picking a model by hand pauses routing and is recorded', async ($, on) => {
+test('picking a model by hand pauses routing and is recorded', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', level: 0 })
   await start($)
   await turn($, 't1', 'what does this flag do?')
@@ -344,7 +347,7 @@ test('picking a model by hand pauses routing and is recorded', async ($, on) => 
 
 // --- Failures name where they happened ---
 
-test('a timeout names the host and keeps the model', async ($, on) => {
+test('a timeout names the host and keeps the model', KEYS, async ($, on) => {
   const seen = stubs(on, {
     mode: 'route',
     fetch: () => new Promise(() => {}),
@@ -359,7 +362,7 @@ test('a timeout names the host and keeps the model', async ($, on) => {
   expect(log.text).toMatch(/error: timed out after 2\.5 s at api\.cloudflare\.com/)
 })
 
-test('an HTTP error names the host', async ($, on) => {
+test('an HTTP error names the host', KEYS, async ($, on) => {
   stubs(on, { mode: 'route', fetch: () => ({ value: { status: 401, ok: false, headers: {}, text: '' } }) })
   await start($)
   await turn($, 't1', 'refactor the parser')
@@ -367,7 +370,7 @@ test('an HTTP error names the host', async ($, on) => {
   expect(status.text).toMatch(/Last decision model error: HTTP 401 from api\.cloudflare\.com/)
 })
 
-test('no new request goes out while the last one is still running', async ($, on) => {
+test('no new request goes out while the last one is still running', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', fetch: () => new Promise(() => {}) })
   await start($)
   await $.turn.start({ turnId: 't1', text: 'first prompt' })
@@ -382,7 +385,7 @@ test('no new request goes out while the last one is still running', async ($, on
 
 // --- The command ---
 
-test('bare /router opens the quick menu; Details opens the pane; unknown words get help', async ($, on) => {
+test('bare /router opens the quick menu; Details opens the pane; unknown words get help', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'watch' })
   seen.answers.push('Details')
   await start($)
@@ -399,7 +402,7 @@ test('bare /router opens the quick menu; Details opens the pane; unknown words g
 
 // --- The band ---
 
-test('the band draws the meter, tier pill, activity, route, reason and readings', async ($, on) => {
+test('the band draws the meter, tier pill, activity, route, reason and readings', KEYS, async ($, on) => {
   stubs(on, { mode: 'route', level: 3 })
   engineDraws(on)
   await start($)
@@ -423,7 +426,7 @@ test('the band draws the meter, tier pill, activity, route, reason and readings'
   expect(await ui.find({ key: 'details' })).toBeDefined()
 })
 
-test('the quick menu pins the next turn, switches modes, and turns routing back on', async ($, on) => {
+test('the quick menu pins the next turn, switches modes, and turns routing back on', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', level: 0 })
   engineDraws(on)
   await start($)
@@ -454,7 +457,7 @@ test('the quick menu pins the next turn, switches modes, and turns routing back 
   expect(seen.store.get('decision-router:mode')).toBe('route')
 })
 
-test('dismissing the quick menu changes nothing', async ($, on) => {
+test('dismissing the quick menu changes nothing', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', level: 0 })
   await start($)
   await $.command.run({ command: 'router', args: '' })
@@ -462,7 +465,7 @@ test('dismissing the quick menu changes nothing', async ($, on) => {
   expect(seen.store.get('decision-router:mode')).toBe('route')
 })
 
-test('there is no hover row any more', async ($, on) => {
+test('there is no hover row any more', KEYS, async ($, on) => {
   stubs(on, { mode: 'route', level: 0 })
   engineDraws(on)
   await start($)
@@ -472,7 +475,7 @@ test('there is no hover row any more', async ($, on) => {
   expect(await ui.find({ key: 'band-off' })).toBeUndefined()
 })
 
-test('in the terminal the band leaves the space above the prompt; the desktop app keeps it there', async ($, on) => {
+test('in the terminal the band leaves the space above the prompt; the desktop app keeps it there', KEYS, async ($, on) => {
   stubs(on, { mode: 'route', level: 3 })
   engineDraws(on)
   await start($)
@@ -484,7 +487,7 @@ test('in the terminal the band leaves the space above the prompt; the desktop ap
   expect(await desktop.find({ type: 'Text', text: ' opus ' })).toBeDefined()
 })
 
-test('the session row is switched on from the pane', async ($, on) => {
+test('the session row is switched on from the pane', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', level: 0 })
   engineDraws(on)
   await start($)
@@ -497,7 +500,7 @@ test('the session row is switched on from the pane', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: 'haiku 1  ' })).toBeDefined()
 })
 
-test('a decision-model fault leads the band', async ($, on) => {
+test('a decision-model fault leads the band', KEYS, async ($, on) => {
   stubs(on, { mode: 'route', fetch: () => ({ value: { status: 503, ok: false, headers: {}, text: '' } }) })
   engineDraws(on)
   await start($)
@@ -508,7 +511,7 @@ test('a decision-model fault leads the band', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: 'keeping model' })).toBeDefined()
 })
 
-test('a narrow band drops readings before the route', async ($, on) => {
+test('a narrow band drops readings before the route', KEYS, async ($, on) => {
   stubs(on, { mode: 'route', level: 3 })
   engineDraws(on)
   await start($)
@@ -518,7 +521,7 @@ test('a narrow band drops readings before the route', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: 'balanced (default)' })).toBeUndefined()
 })
 
-test('the spinner says Choosing model while the decision model answers', async ($, on) => {
+test('the spinner says Choosing model while the decision model answers', KEYS, async ($, on) => {
   stubs(on, { mode: 'route', level: 2 })
   on('ui.render', ($: any, e: any) => ({ type: 'Text', props: {}, children: [String(e.props?.message ?? '')] }))
   await start($)
@@ -539,7 +542,7 @@ const CLOUDFLARE = 'Cloudflare Clef (hosted)'
 const DOWN = { value: { status: 503, ok: false, headers: {}, text: 'down' } }
 const run = ($: any, args: string) => $.command.run({ command: 'router', args })
 
-test('/router setup finds a llama.cpp server on its default port and saves it', async ($, on) => {
+test('/router setup finds a llama.cpp server on its default port and saves it', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'watch' })
   seen.answers.push(LLAMA)
   await start($)
@@ -547,14 +550,14 @@ test('/router setup finds a llama.cpp server on its default port and saves it', 
   expect(seen.asked[0].options).toEqual([LLAMA, 'Unsloth (a server on your machine)', CLOUDFLARE, 'TypeSafe Jev (hosted)'])
   expect(seen.bodies[0].url).toBe('http://127.0.0.1:9931/v1/systemone')
   expect(seen.config).toEqual([
-    { key: 'decision-router.backend', value: 'llamacpp' },
+    { key: 'decision-router.backend', value: 'llama.cpp server' },
     { key: 'decision-router.local_url', value: 'http://127.0.0.1:9931' },
   ])
   expect(result.text).toMatch(/answered in \d+ ms at 127\.0\.0\.1:9931/)
   expect(result.text).toContain('/router route')
 })
 
-test('/router setup takes a typed address when the default does not answer', async ($, on) => {
+test('/router setup takes a typed address when the default does not answer', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'watch', fetch: (e: any) => (e.url.includes('10.0.0.9') ? undefined : DOWN) })
   seen.answers.push(LLAMA, '10.0.0.9:9931')
   await start($)
@@ -565,7 +568,7 @@ test('/router setup takes a typed address when the default does not answer', asy
   expect(result.text).toContain('10.0.0.9:9931')
 })
 
-test('/router setup can be cancelled, or save an address that does not answer yet', async ($, on) => {
+test('/router setup can be cancelled, or save an address that does not answer yet', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'watch', fetch: () => DOWN })
   seen.answers.push(LLAMA, 'Cancel setup')
   await start($)
@@ -577,39 +580,39 @@ test('/router setup can be cancelled, or save an address that does not answer ye
   expect(saved.text).toContain('Saved without a working test')
 })
 
-test('/router setup for Cloudflare asks for the account ID but never for the key', async ($, on) => {
-  const seen = stubs(on, { mode: 'watch', env: {} })
+test('/router setup for Cloudflare asks for the account ID but never for the key', { options: {} }, async ($, on) => {
+  const seen = stubs(on, { mode: 'watch' })
   seen.answers.push(CLOUDFLARE, 'A'.repeat(32))
   await start($)
   const result = await run($, 'setup')
   expect(seen.config).toEqual([
-    { key: 'decision-router.backend', value: 'clef-workers' },
+    { key: 'decision-router.backend', value: 'Cloudflare Workers AI' },
     { key: 'decision-router.cloudflare_account_id', value: 'a'.repeat(32) },
   ])
-  expect(result.text).toContain('No Cloudflare API token found. Set CLOUDFLARE_API_TOKEN in your shell')
+  expect(result.text).toContain("No Cloudflare API token is saved. Add it in the plugin's settings")
   // Nothing was sent, and no question asked for a token.
   expect(seen.bodies.length).toBe(0)
   expect(seen.asked.every((q) => !/token|key/i.test(q.question))).toBe(true)
 })
 
-test('/router setup for Cloudflare tests the connection when the shell already has the key', async ($, on) => {
+test('/router setup for Cloudflare tests the connection when the settings already have the key', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'watch' })
   seen.answers.push(CLOUDFLARE)
   await start($)
   const result = await run($, 'setup')
-  expect(seen.config).toEqual([{ key: 'decision-router.backend', value: 'clef-workers' }])
+  expect(seen.config).toEqual([{ key: 'decision-router.backend', value: 'Cloudflare Workers AI' }])
   expect(seen.bodies[0].url).toContain('/accounts/acct/ai/run/@cf/cloudflare/clef-flash')
   expect(result.text).toMatch(/Clef Flash answered in \d+ ms/)
 })
 
-test('dismissing /router setup saves nothing', async ($, on) => {
+test('dismissing /router setup saves nothing', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'watch' })
   await start($)
   expect((await run($, 'setup')).text).toBe('Setup cancelled.')
   expect(seen.config).toEqual([])
 })
 
-test('/router test reports the decision model answering, or why it did not', async ($, on) => {
+test('/router test reports the decision model answering, or why it did not', KEYS, async ($, on) => {
   let healthy = true
   const seen = stubs(on, { mode: 'watch', fetch: () => (healthy ? undefined : DOWN) })
   await start($)
@@ -623,10 +626,40 @@ test('/router test reports the decision model answering, or why it did not', asy
   expect(seen.logs.join('\n')).not.toContain('paused for a minute')
 })
 
-test('/router test names a missing key and where to put it', async ($, on) => {
-  stubs(on, { mode: 'watch', env: { CLOUDFLARE_ACCOUNT_ID: 'acct' } })
+test('/router test names a missing key and where to put it', { options: { cloudflare_account_id: 'acct' } }, async ($, on) => {
+  stubs(on, { mode: 'watch' })
   await start($)
-  expect((await run($, 'test')).text).toContain('No Cloudflare API token found')
+  expect((await run($, 'test')).text).toContain("No Cloudflare API token is saved. Add it in the plugin's settings")
+})
+
+test('a key in the shell is never read: keys come only from the settings', { options: { cloudflare_account_id: 'acct' } }, async ($, on) => {
+  const seen = stubs(on, { mode: 'route', level: 0, env: { CLOUDFLARE_API_TOKEN: 'from-shell', TYPESAFE_API_KEY: 'from-shell', ROUTER_LOCAL_API_KEY: 'from-shell' } })
+  await start($)
+  await turn($, 't1', 'where is main?')
+  expect(seen.bodies.length).toBe(0)
+  expect((await run($, 'status')).text).toContain('missing cloudflare_api_token')
+})
+
+// --- Settings ---
+
+const SAVED = (options: Record<string, unknown>) => ({ pluginConfigs: { 'decision-router@decision-router-local': { options } } })
+
+test('settings saved by earlier versions keep working', KEYS, async ($, on) => {
+  const seen = stubs(on, { settings: SAVED({ mode: 'route', backend: 'llamacpp', preference: 'quality', local_url: 'http://10.0.0.9:9931' }) })
+  await start($)
+  // Claude Code handed the plugin defaults for the old values; the session uses the saved choices anyway.
+  expect((await run($, 'status')).text).toContain('Decision model: llama.cpp (llamacpp). Preference: quality.')
+  // The saved file is left as it is: the relabelling happens as the settings are read (see the core tests).
+  expect(seen.config).toEqual([])
+})
+
+test('settings saved as labels are read as their values', { options: { mode: 'Switch models', backend: 'llama.cpp server', preference: 'Save usage', local_url: 'http://10.0.0.9:9931' } }, async ($, on) => {
+  const seen = stubs(on, { level: 0, settings: SAVED({ mode: 'Switch models', backend: 'llama.cpp server', preference: 'Save usage' }) })
+  await start($)
+  expect(seen.config).toEqual([])
+  await turn($, 't1', 'where is main?')
+  expect(seen.bodies[0].url).toBe('http://10.0.0.9:9931/v1/systemone')
+  expect(seen.models[0]).toBe('claude-haiku-5-5')
 })
 
 // --- What the journal keeps, and the confidence that gates the pick ---
@@ -644,7 +677,7 @@ const withAnswers = (extra: Record<string, unknown>) => () => ({
   value: { status: 200, ok: true, headers: {}, text: JSON.stringify(answers(2, extra)) },
 })
 
-test('a task split between two levels of the same tier is not low confidence', async ($, on) => {
+test('a task split between two levels of the same tier is not low confidence', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', fetch: withAnswers(SAME_TIER) })
   await start($)
   await turn($, 't1', 'rename the helper in the settings file')
@@ -654,7 +687,7 @@ test('a task split between two levels of the same tier is not low confidence', a
   expect(record.confidence).toBe(1)
 })
 
-test('a split between tiers is low confidence, and the journal keeps which way the model leaned', async ($, on) => {
+test('a split between tiers is low confidence, and the journal keeps which way the model leaned', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', fetch: withAnswers(SPLIT_TIERS) })
   await start($)
   await turn($, 't1', 'rework the sync engine')
@@ -670,7 +703,7 @@ test('a split between tiers is low confidence, and the journal keeps which way t
   expect((await run($, 'tune')).text).toContain('leaned (before the confidence filter and the policy): opus 100% of 1')
 })
 
-test('each record keeps both plan windows, not only the higher one', async ($, on) => {
+test('each record keeps both plan windows, not only the higher one', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', level: 2, usage: 10 })
   await start($)
   await turn($, 't1', 'explain the cache layer')
@@ -681,7 +714,7 @@ test('each record keeps both plan windows, not only the higher one', async ($, o
 
 // --- The pane ---
 
-test('the Close button closes the pane it opened', async ($, on) => {
+test('the Close button closes the pane it opened', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', level: 0 })
   await start($)
   const pane = await $.ui.mount(PANE)
@@ -690,7 +723,7 @@ test('the Close button closes the pane it opened', async ($, on) => {
   expect(seen.closed).toEqual(['decision-router'])
 })
 
-test('a narrow pane stacks labels above values, wraps its rows and shortens its bars', async ($, on) => {
+test('a narrow pane stacks labels above values, wraps its rows and shortens its bars', KEYS, async ($, on) => {
   stubs(on, { mode: 'route', level: 3 })
   await start($)
   await turn($, 't1', 'track down the memory leak')
@@ -708,7 +741,7 @@ test('a narrow pane stacks labels above values, wraps its rows and shortens its 
   expect(Math.max(...(await barOf(narrow)))).toBe(14)
 })
 
-test('the status stands on its own line, so a long fault wraps instead of pushing the buttons out', async ($, on) => {
+test('the status stands on its own line, so a long fault wraps instead of pushing the buttons out', KEYS, async ($, on) => {
   const long = 'timed out after 8 s at 10.0.0.9:8888'
   stubs(on, { mode: 'route', fetch: () => ({ value: { status: 503, ok: false, headers: {}, text: long } }) })
   await start($)
@@ -720,7 +753,7 @@ test('the status stands on its own line, so a long fault wraps instead of pushin
   expect(await ui.find({ key: 'mode-route' })).toBeDefined()
 })
 
-test('the Log tab gives each entry one line in a wide pane and two in a narrow one', async ($, on) => {
+test('the Log tab gives each entry one line in a wide pane and two in a narrow one', KEYS, async ($, on) => {
   stubs(on, { mode: 'route', level: 3 })
   await start($)
   await turn($, 't1', 'track down the memory leak')
@@ -736,7 +769,7 @@ test('the Log tab gives each entry one line in a wide pane and two in a narrow o
   expect(await tierText(60)).toBe('opus')
 })
 
-test('the pane shows the next turn, why, pins with odds, session, plan and context', async ($, on) => {
+test('the pane shows the next turn, why, pins with odds, session, plan and context', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', level: 3 })
   await start($)
   await turn($, 't1', 'track down the memory leak')
@@ -764,7 +797,7 @@ test('the pane shows the next turn, why, pins with odds, session, plan and conte
   expect(await ui.find({ type: 'Text', text: /Not enough decisions yet/ })).toBeDefined()
 })
 
-test('settings saved under the old router-enhanced name carry over', async ($, on) => {
+test('settings saved under the old router-enhanced name carry over', KEYS, async ($, on) => {
   const seen = stubs(on, { level: 0 })
   seen.store.set('router-enhanced:mode', 'route')
   seen.store.set('router-enhanced:journal', [{ at: 1, mode: 'route', tier: 'opus', reason: 'first', difficulty: 3, confidence: 0.9, activity: 'debug', usedPercent: 10, latencyMs: 300, error: null, outcome: 'ok' }])
@@ -798,7 +831,7 @@ async function settle(seen: any) {
 const spawnLog = (seen: any): any[] => (seen.store.get(SPAWN_LOG) as any[]) ?? []
 const watching = async ($: any) => $.command.run({ command: 'router', args: 'subagents watch' })
 
-test('subagents are not watched until asked, so no task text is sent', async ($, on) => {
+test('subagents are not watched until asked, so no task text is sent', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', level: 0 })
   subagents(on)
   await start($)
@@ -810,7 +843,7 @@ test('subagents are not watched until asked, so no task text is sent', async ($,
   expect(text.text).toMatch(/Subagents: off/)
 })
 
-test('turning watching on says where task text goes, and the choice is remembered', async ($, on) => {
+test('turning watching on says where task text goes, and the choice is remembered', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route' })
   subagents(on)
   await start($)
@@ -821,7 +854,7 @@ test('turning watching on says where task text goes, and the choice is remembere
   expect(usage.text).toMatch(/^Usage/)
 })
 
-test('a watched subagent starts exactly as asked, on its usual model', async ($, on) => {
+test('a watched subagent starts exactly as asked, on its usual model', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', level: 0 })
   const started = subagents(on)
   await start($)
@@ -838,7 +871,7 @@ test('a watched subagent starts exactly as asked, on its usual model', async ($,
   expect(r.reason).toBe('advice')
 })
 
-test('Explore gets Haiku by rule, without asking the decision model', async ($, on) => {
+test('Explore gets Haiku by rule, without asking the decision model', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route' })
   subagents(on)
   await start($)
@@ -850,7 +883,7 @@ test('Explore gets Haiku by rule, without asking the decision model', async ($, 
   expect(spawnLog(seen)[0].reason).toBe('rule')
 })
 
-test('what should be left alone gets no pick and no request', async ($, on) => {
+test('what should be left alone gets no pick and no request', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route' })
   subagents(on)
   await start($)
@@ -869,7 +902,7 @@ test('what should be left alone gets no pick and no request', async ($, on) => {
   expect(spawnLog(seen).every((r) => r.pick === null)).toBe(true)
 })
 
-test('a pick never goes above the model the subagent ran on', async ($, on) => {
+test('a pick never goes above the model the subagent ran on', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', level: 4 })
   subagents(on)
   await start($)
@@ -881,7 +914,7 @@ test('a pick never goes above the model the subagent ran on', async ($, on) => {
   expect(text.text).toMatch(/Could have been cheaper: 0 of 1/)
 })
 
-test('a burst is asked about one at a time, and past the line it goes unasked', async ($, on) => {
+test('a burst is asked about one at a time, and past the line it goes unasked', KEYS, async ($, on) => {
   let running = 0
   let most = 0
   const seen = stubs(on, {
@@ -909,7 +942,7 @@ test('a burst is asked about one at a time, and past the line it goes unasked', 
   expect(log.filter((r) => r.error === 'too many subagents at once').length).toBe(12 - log.filter((r) => r.pick === 'haiku').length)
 })
 
-test('a request for a main turn is not lost to a subagent waiting in line', async ($, on) => {
+test('a request for a main turn is not lost to a subagent waiting in line', KEYS, async ($, on) => {
   let release: (v: any) => void = () => {}
   const ok = { value: { status: 200, ok: true, headers: {}, text: JSON.stringify(answers(0)) } }
   let calls = 0
@@ -937,7 +970,7 @@ test('a request for a main turn is not lost to a subagent waiting in line', asyn
   expect(log.text).toMatch(/haiku/)
 })
 
-test('a subagent waits while a main request is running, then goes unasked past one timeout', async ($, on) => {
+test('a subagent waits while a main request is running, then goes unasked past one timeout', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', fetch: () => new Promise(() => {}) })
   subagents(on)
   await start($)
@@ -952,7 +985,7 @@ test('a subagent waits while a main request is running, then goes unasked past o
   expect(spawnLog(seen)[0].pick).toBe(null)
 })
 
-test('failures while watching subagents do not pause main routing', async ($, on) => {
+test('failures while watching subagents do not pause main routing', KEYS, async ($, on) => {
   const setup: Setup = { mode: 'route', level: 0, fetch: () => ({ value: { status: 500, ok: false, headers: {}, text: 'down' } }) }
   const seen = stubs(on, setup)
   subagents(on)
@@ -968,7 +1001,7 @@ test('failures while watching subagents do not pause main routing', async ($, on
   expect(seen.models[0]).toBe('claude-haiku-5-5')
 })
 
-test('tokens and tool errors are added up per subagent and saved when it finishes', async ($, on) => {
+test('tokens and tool errors are added up per subagent and saved when it finishes', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', level: 0 })
   subagents(on)
   on('turn.complete', () => ({ text: '' }))
@@ -991,7 +1024,7 @@ test('tokens and tool errors are added up per subagent and saved when it finishe
   expect(text.text).toMatch(/Tool errors: 1 across 1 subagents/)
 })
 
-test('nothing of a subagent\'s prompt is saved', async ($, on) => {
+test('nothing of a subagent\'s prompt is saved', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', level: 0 })
   subagents(on)
   await start($)
@@ -1002,7 +1035,7 @@ test('nothing of a subagent\'s prompt is saved', async ($, on) => {
   expect(JSON.stringify([...seen.store.entries()])).not.toMatch(/SECRET-PROMPT-TEXT/)
 })
 
-test('watching stays out of the main log, and a subagent\'s request leaves the main route alone', async ($, on) => {
+test('watching stays out of the main log, and a subagent\'s request leaves the main route alone', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', level: 0 })
   subagents(on)
   await start($)
@@ -1016,7 +1049,7 @@ test('watching stays out of the main log, and a subagent\'s request leaves the m
   expect(seen.models).toEqual(['claude-sonnet-5-5'])
 })
 
-test('turning watching off clears the line and stops new records', async ($, on) => {
+test('turning watching off clears the line and stops new records', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', fetch: () => new Promise(() => {}) })
   subagents(on)
   await start($)
@@ -1031,7 +1064,7 @@ test('turning watching off clears the line and stops new records', async ($, on)
   expect(spawnLog(seen)[1].error).toBe('subagent routing was turned off')
 })
 
-test('a subagent request that times out is recorded at once, and nothing new goes out until it settles', async ($, on) => {
+test('a subagent request that times out is recorded at once, and nothing new goes out until it settles', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', fetch: () => new Promise(() => {}) })
   subagents(on)
   await start($)
@@ -1044,7 +1077,7 @@ test('a subagent request that times out is recorded at once, and nothing new goe
   expect(seen.bodies.length).toBe(1)
 })
 
-test('a subagent\'s own turn sends nothing and leaves the main turn\'s state alone', async ($, on) => {
+test('a subagent\'s own turn sends nothing and leaves the main turn\'s state alone', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', level: 2 })
   await start($)
   await $.turn.start({ turnId: 't1', text: 'run the failing command' })
@@ -1070,7 +1103,7 @@ async function subStep($: any, agentId: string, effort = 'medium') {
   while (s.done !== true) s = await stream.next()
 }
 
-test('on: an easy general subagent starts on the pick, with its prompt untouched', async ($, on) => {
+test('on: an easy general subagent starts on the pick, with its prompt untouched', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'watch', level: 0 })
   const started = subagents(on)
   await start($)
@@ -1090,7 +1123,7 @@ test('on: an easy general subagent starts on the pick, with its prompt untouched
   expect(report.text).toMatch(/sonnet → haiku/)
 })
 
-test('on: Explore goes to Haiku at once, without asking', async ($, on) => {
+test('on: Explore goes to Haiku at once, without asking', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route' })
   const started = subagents(on)
   await start($)
@@ -1100,7 +1133,7 @@ test('on: Explore goes to Haiku at once, without asking', async ($, on) => {
   expect(seen.bodies.length).toBe(0)
 })
 
-test('on: a hard task stays at the model it would have used, and never goes above it', async ($, on) => {
+test('on: a hard task stays at the model it would have used, and never goes above it', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', level: 4 })
   const started = subagents(on)
   await start($)
@@ -1112,7 +1145,7 @@ test('on: a hard task stays at the model it would have used, and never goes abov
   expect(spawnLog(seen).map((r) => r.pick)).toEqual(['sonnet', 'opus'])
 })
 
-test('on: security-sensitive work keeps its Sonnet floor', async ($, on) => {
+test('on: security-sensitive work keeps its Sonnet floor', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', fetch: () => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify(answers(0, { security: { type: 'noul', noul: 0.9 } })) } }) })
   const started = subagents(on)
   await start($)
@@ -1122,7 +1155,7 @@ test('on: security-sensitive work keeps its Sonnet floor', async ($, on) => {
   expect(seen.bodies.length).toBe(1)
 })
 
-test('on: what should be left alone starts untouched', async ($, on) => {
+test('on: what should be left alone starts untouched', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route' })
   const started = subagents(on)
   await start($)
@@ -1138,7 +1171,7 @@ test('on: what should be left alone starts untouched', async ($, on) => {
   expect(seen.bodies.length).toBe(0)
 })
 
-test('on: main routing off or paused leaves subagents alone too', async ($, on) => {
+test('on: main routing off or paused leaves subagents alone too', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'off', level: 0 })
   const started = subagents(on)
   await start($)
@@ -1148,8 +1181,8 @@ test('on: main routing off or paused leaves subagents alone too', async ($, on) 
   expect(seen.bodies.length).toBe(0)
 })
 
-test('on: a session that forces one subagent model is left alone, and a default model sets the ceiling', async ($, on) => {
-  const seen = stubs(on, { mode: 'route', level: 4, env: { CLOUDFLARE_ACCOUNT_ID: 'acct', CLOUDFLARE_API_TOKEN: 'token', CLAUDE_CODE_SUBAGENT_MODEL: 'haiku' } })
+test('on: a session that forces one subagent model is left alone, and a default model sets the ceiling', KEYS, async ($, on) => {
+  const seen = stubs(on, { mode: 'route', level: 4, env: { CLAUDE_CODE_SUBAGENT_MODEL: 'haiku' } })
   const started = subagents(on)
   await start($)
   await routing($)
@@ -1158,8 +1191,8 @@ test('on: a session that forces one subagent model is left alone, and a default 
   expect(seen.bodies.length).toBe(1)
 })
 
-test('on: CLAUDE_CODE_SUBAGENT_MODEL_FORCE turns routing off for subagents', async ($, on) => {
-  stubs(on, { mode: 'route', level: 0, env: { CLOUDFLARE_ACCOUNT_ID: 'acct', CLOUDFLARE_API_TOKEN: 'token', CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '1' } })
+test('on: CLAUDE_CODE_SUBAGENT_MODEL_FORCE turns routing off for subagents', KEYS, async ($, on) => {
+  stubs(on, { mode: 'route', level: 0, env: { CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '1' } })
   const started = subagents(on)
   await start($)
   await routing($)
@@ -1167,7 +1200,7 @@ test('on: CLAUDE_CODE_SUBAGENT_MODEL_FORCE turns routing off for subagents', asy
   expect(started[0].model).toBeUndefined()
 })
 
-test('on: a failing decision model starts the subagent on its usual model', async ($, on) => {
+test('on: a failing decision model starts the subagent on its usual model', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', fetch: () => ({ value: { status: 500, ok: false, headers: {}, text: 'down' } }) })
   const started = subagents(on)
   await start($)
@@ -1179,7 +1212,7 @@ test('on: a failing decision model starts the subagent on its usual model', asyn
   expect(spawnLog(seen)[0].error).toMatch(/HTTP 500/)
 })
 
-test('on: a silent server holds a subagent for one timeout, and soon not at all', async ($, on) => {
+test('on: a silent server holds a subagent for one timeout, and soon not at all', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', fetch: () => new Promise(() => {}) })
   const started = subagents(on)
   await start($)
@@ -1196,7 +1229,7 @@ test('on: a silent server holds a subagent for one timeout, and soon not at all'
   expect(spawnLog(seen)[3].error).toMatch(/paused for a minute/)
 })
 
-test('on: a burst is asked about one at a time and every subagent starts', async ($, on) => {
+test('on: a burst is asked about one at a time and every subagent starts', KEYS, async ($, on) => {
   let running = 0
   let most = 0
   const seen = stubs(on, {
@@ -1219,7 +1252,7 @@ test('on: a burst is asked about one at a time and every subagent starts', async
   expect(seen.bodies.length).toBe(5)
 })
 
-test('on: each model request of a routed subagent carries its model and effort, keeping a raised effort', async ($, on) => {
+test('on: each model request of a routed subagent carries its model and effort, keeping a raised effort', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', level: 0 })
   subagents(on)
   await start($)
@@ -1232,7 +1265,7 @@ test('on: each model request of a routed subagent carries its model and effort, 
   expect(seen.efforts[1]).toBe('max')
 })
 
-test('on: three tool errors move a subagent up one tier, within its ceiling', async ($, on) => {
+test('on: three tool errors move a subagent up one tier, within its ceiling', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', level: 0 })
   subagents(on)
   on('turn.complete', () => ({ text: '' }))
@@ -1250,7 +1283,7 @@ test('on: three tool errors move a subagent up one tier, within its ceiling', as
   expect(report.text).toMatch(/Moved up after tool errors: 1/)
 })
 
-test('on: a subagent already at its ceiling stays there after tool errors', async ($, on) => {
+test('on: a subagent already at its ceiling stays there after tool errors', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', level: 4 })
   subagents(on)
   await start($)
@@ -1262,7 +1295,7 @@ test('on: a subagent already at its ceiling stays there after tool errors', asyn
   expect(spawnLog(seen)[0].escalated).toBeUndefined()
 })
 
-test('on: a subagent moves up after tool errors only to the advisor, and not once the advisor weighed in', async ($, on) => {
+test('on: a subagent moves up after tool errors only to the advisor, and not once the advisor weighed in', KEYS, async ($, on) => {
   const setup: Setup = { mode: 'route', level: 0, settings: { advisorModel: 'claude-opus-4-7' }, native: 'claude-haiku-5-5' }
   const seen = stubs(on, setup)
   subagents(on)
@@ -1281,7 +1314,7 @@ test('on: a subagent moves up after tool errors only to the advisor, and not onc
   expect(seen.models).toEqual(['claude-haiku-5-5', 'claude-haiku-5-5', 'claude-haiku-5-5'])
 })
 
-test('on: turning it off stops rewriting a running subagent\'s requests', async ($, on) => {
+test('on: turning it off stops rewriting a running subagent\'s requests', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'route', level: 0 })
   subagents(on)
   await start($)

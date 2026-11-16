@@ -1,184 +1,45 @@
-# claude-decision-router
+# Decision Router
 
-Inside Claude Code the plugin is named `decision-router` and its command is `/router`: Claude Code reserves plugin names that start with `claude-` for Anthropic's own. It was called `router-enhanced` before 0.6; your saved mode and decision log carry over.
+Decision Router picks the right Claude model for every message you send in Claude Code, so your plan lasts longer and you never have to switch models yourself.
 
-A Claude Code plugin that picks the Claude model for each turn, and for the subagents Claude starts if you turn that on, so you get the most out of your subscription without choosing models by hand.
+Quick questions go to a fast, light model. Hard problems go to a stronger one. As your 5-hour and weekly limits fill up, it leans toward lighter models, so you don't run out halfway through the day.
 
-A decision model (Cloudflare's Clef or TypeSafe's Jev) **describes** each task: what kind of work it is, how difficult, how much reasoning it needs, how much code it touches, whether it's security-sensitive, and whether it continues the task already running. The router then **decides**: it turns those answers into a probability for each tier and applies a switching policy that knows about your plan's 5-hour and weekly limits.
+![The router under the prompt, showing the model it picked and why](docs/band.png)
 
-## How a turn runs
+## How it works
 
-1. **`turn.start`**: the request to the decision model starts as soon as the turn exists, so its answer is usually ready by the first model request. A turn with no typed text (a continuation) asks nothing and keeps its route.
-2. **First `turn.step`**: the answers become a tier distribution (`src/features.ts`), and the policy (`src/policy.ts`) decides whether to move.
-3. **Every `turn.step`** of the main conversation runs on the chosen model and effort. Subagents have their own routing, which is off by default (see Routing subagents).
-4. **Three tool errors in a turn** move up one tier for the rest of it, then hold for two turns.
-5. **Picking a model yourself** with `/model` pauses routing for the session and records the correction.
-6. **`ultrathink` is respected**: a request Claude Code raised to `xhigh` or `max` keeps that effort on whichever model the router picks.
-7. **A pin** (`/router pin opus`, or the pane's buttons) runs the next turn on that tier without asking the decision model, then routing carries on where it was.
+1. **A small decision model reads your message** and rates it: how hard it is, how much code it touches, and whether it's security work. It never chooses a model itself.
+2. **The router picks Haiku, Sonnet, Opus or Fable** from that rating, your plan usage, and what you're already working on.
+3. **Claude answers on that model.** A short note tells you whenever the model changes, and why.
 
-## What you see
+It's careful about switching. It won't change models on a single message, it stays put in the middle of a task, and if the decision model can't be reached, your current model simply stays.
 
-![The band under the permission mode](docs/band.png)
+## Getting started
 
-- **The band**, on the line under the prompt, below the permission mode (`auto mode on`). In the desktop app, which has no such line, it sits above the prompt instead. Its design is claude-router's: signal bars lit up to the tier, the tier pill, the activity in orange, the model and effort, the reason (`↑ jump`, `↓ downgrade`, `= fits`, `… waiting to go up`), the decision model's evidence against the bar (`Laya 91% ≥ 82%`), your 5-hour and weekly plan usage, context fill and cache hit. Parts drop from the right as the terminal narrows; the tier and model never do.
-- **The quick menu**: `/router`, or **Router** at the end of the band. A numbered question in Claude Code's own dialog, answered from the keyboard: switch between route and watch, pin the next turn (a second step asks which model), turn routing off or on, or open the details. Esc closes it without changing anything.
-- **Faults lead the band**, in yellow, with where they happened: `⚠ Laya: timed out after 8 s at 10.0.0.9:8888 · keeping model`.
-- **The pane** (`/router pane`, or Details in the menu), with Now, Log and Tune tabs. Every control is there too, including **Session row**, which adds a second band line with turns per tier and switches.
+1. Install Decision Router. In Claude Code, run `/plugin install decision-router --marketplace frankievalentine/claude-decision-router`. In the desktop app, open Customize > Plugins, add the marketplace `frankievalentine/claude-decision-router`, then add Decision Router.
+2. Run `/router setup` and choose where the decision model runs: on a hosted service (Cloudflare or TypeSafe) or on your own computer (llama.cpp, Unsloth or SGLang). Add any key it needs in the plugin's settings.
+3. Use it as usual. It starts in **Watch only** mode: it shows what it would pick and changes nothing.
+4. When the picks look right, run `/router route` to let it switch models for you.
 
-![The pane](docs/pane.png)
+Type `/router` at any time for a quick menu: switch modes, choose the model for your next message, or open the details panel.
 
-- **The spinner** reads "Choosing model" while the decision model answers.
-- **A toast** names every model switch with its reason and evidence: `Model changed: Haiku 5.5 · low → Opus 5.5 · xhigh · jump (Laya 92% ≥ 75%)`.
+## Works in the terminal and the desktop app
 
-## The policy
+Decision Router works wherever Claude Code runs: the terminal, your editor, and the Code tab of the Claude desktop app. In the desktop app, its status line appears above the prompt after your first message.
 
-- **Evidence before switching.** A move up needs enough probability above the current tier on two consecutive turns, or one strong answer. A move down needs a clear majority on two turns, and never happens in the middle of a task.
-- **The prompt cache counts.** Switching models discards the cached conversation, so the bar rises with the size of the context.
-- **Plan usage.** As the higher of your 5-hour and weekly usage passes 50%, 75% and 90%, moving up gets harder and moving down easier. From 75% the top tier is Opus; from 95%, Sonnet.
-- **Fable** (off by default) is used only when the decision model rates a task very hard, never for security-sensitive work, and not past 75% usage. It may bill to usage credits.
-- **Security-sensitive work** runs on Sonnet or above.
-- **Fails open.** A missing key, a dead server, a timeout or a low-confidence answer leaves your current model alone. Three failures in a row pause the decision model for a minute.
-- **The advisor.** Claude Code's [advisor](https://code.claude.com/docs/en/advisor) only works with a main model at or below it, and a main model above it runs without one. With `advisorModel` set, routing, pins and escalations stay at the strongest tier your advisor still applies to: Opus or below for an Opus advisor, Sonnet or below for a Sonnet one. The router reads the setting at session start, before each turn and on `/router`, so a change with `/advisor` applies from the next turn. It ignores it when `CLAUDE_CODE_DISABLE_ADVISOR_TOOL` is set, and shows it on the band, the pane and `/router status`.
-  - Claude Code checks the advisor against the session's own model, not the one a turn is routed to. An advisor below the session's model never runs, so it limits nothing; `/router status` says so.
-  - A turn in which the advisor was consulted does not move up after three tool errors: its guidance gets that chance, and the prompt cache stays.
-  - An advisor set with `claude --advisor` is not in the settings, so the router learns of it only once Claude consults it. From then on routing stays at or below the tier that request ran on or the session's own model, whichever is higher.
+It also works alongside Claude Code's `/advisor`: it never picks a model stronger than your advisor, so the advisor keeps working.
 
-## Install
+## What it sends, and where
 
-The repository holds a one-plugin marketplace, so Claude Code prompts for your keys on install and stores the secret ones in your system's secure credential store.
+- **Your message goes to the decision model you choose**, so it can rate the task. With llama.cpp, Unsloth or SGLang, it stays on your own computer or network. With Cloudflare or TypeSafe, it's sent to that service.
+- **If you turn on subagent routing** (`/router subagents on`, off by default), the task Claude gives each general subagent is sent the same way.
+- **Nothing else leaves your machine.** The router's own log keeps labels and numbers only, never the text of your messages.
+- **Keys stay in your settings.** API keys are entered only in the plugin's settings, where Claude Code stores them in your system's secure credential store. The plugin never reads keys from your environment.
 
-1. Add the marketplace in Claude Code, from a clone (`git clone https://github.com/frankievalentine/claude-decision-router.git ~/claude-decision-router`, then `/plugin marketplace add ~/claude-decision-router`) or straight from GitHub (`/plugin marketplace add frankievalentine/claude-decision-router`).
-2. Then: `/plugin install decision-router@decision-router-local`.
-3. Run `/router setup`: pick a decision model, and it finds your server (or asks for its address), tests it and saves the settings. It never asks for a key: keys come from `CLOUDFLARE_API_TOKEN`, `TYPESAFE_API_KEY` or `ROUTER_LOCAL_API_KEY` in your shell, or from Configure options (see Settings and keys).
-4. Use **watch** mode for a few days: the band shows what the router would pick and why, and nothing changes.
-5. When the picks look right: `/router route`.
+See the [privacy notice](https://github.com/frankievalentine/claude-decision-router/blob/main/PRIVACY.md) for details.
 
-A clone is read in place: after `git pull`, `/reload-plugins` picks up the change. A GitHub install runs its own copy: `claude plugin marketplace update decision-router-local`, then `claude plugin update decision-router@decision-router-local`.
+## Learn more
 
-Requires Claude Code 2.1.299 or later (per-request model changes, and the `weight` and `tabular` text styles the band uses). Developed and tested with 2.1.317.
+The [reference](docs/REFERENCE.md) covers every setting, each decision-model option in detail, the switching rules, and how the code is laid out.
 
-To work on the code instead, load the folder directly: `claude --plugin-dir ~/claude-decision-router/plugin`. Claude Code then hot-reloads your edits and writes the mods API types into `.claude-plugin/types/` for your editor. With `--plugin-dir`, set keys as `CLOUDFLARE_API_TOKEN` or `TYPESAFE_API_KEY` in your shell.
-
-## Backends
-
-`/router setup` configures any of these for you; `/router test` sends one request to the configured one and reports the answer or the exact fault. The details below are for doing it by hand.
-
-| Backend | Calls | Needs |
-|---|---|---|
-| `clef-workers` (default) | Clef Flash on Cloudflare Workers AI | Cloudflare account ID and a Workers AI token |
-| `jev-api` | Jev at `https://api.typesafe.ai/v1/systemone`. Jev runs only there: it has no public weights | TypeSafe API key |
-| `local` | A System One server you run, default `http://127.0.0.1:8888/v1/systemone` (Unsloth) | The server, and its key if it needs one |
-| `llamacpp` | llama.cpp's `llama-server` at `/v1/systemone`, default `http://127.0.0.1:9931` | A decision model such as Clef or Laya loaded in it |
-
-All four use the same System One request format. Settings saved as `clef-local` or `jev-local` by earlier versions are read as `local`.
-
-### Laya or Clef with Unsloth
-
-1. In Unsloth, open Settings → API → Decision API, turn on **Serve requests**, and pick Laya or Clef.
-2. For a server on another machine, turn on Unsloth's **remote LAN** access, and copy an access token (`sk-unsloth-…`). Keyless access applies to localhost only.
-3. Run `/plugin`, open **decision-router** on the **Installed** tab, and choose **Configure options**:
-   - `backend`: `local`
-   - `local_url`: `http://<that machine>:8888/v1/systemone`, or empty on the same machine
-   - `local_api_key`: the token. Keys appear only here, never on `/config`. Setting `ROUTER_LOCAL_API_KEY` in your shell also works.
-   - `decision_model`: empty for the model selected in Unsloth, or `laya`
-4. Close the panel; Claude Code reloads the plugin.
-
-The router sends a small warm-up request at session start so the server loads its model before your first prompt (Unsloth takes 10 to 20 seconds the first time). Local backends wait up to 8 seconds per answer and hosted ones 2.5; `timeout_ms` overrides both. While a request is still running, no new one is sent, so a slow server never builds up a backlog.
-
-The router ignores each server's own `confidence` field, which Unsloth computes differently from Jev, and computes confidence itself, from the tier the answer points to: 0 when the probability is spread evenly over Haiku, Sonnet and Opus, 1 when one tier holds it all. A task split between two difficulty levels that map to the same tier is therefore not low confidence, and `min_confidence` means the same thing on every backend.
-
-### Clef or Laya with llama.cpp
-
-`llama-server` answers System One requests itself at `/v1/systemone` when it runs a native decision model (Clef, Laya, OpenJev and others), so the router asks it the same way as the hosted backends: one request per turn with all six questions.
-
-1. Start the server where the model runs. For a 16 GB GPU, use the Q8_0 build of Clef Flash (about 9.5 GB); the full-precision file (about 19 GB) doesn't fit, and llama-server would move part of it to system memory and shrink the context to make room.
-   ```
-   llama-server -m /path/to/Clef-Flash-Q8_0.gguf \
-     --host 0.0.0.0 --port 9931 \
-     -ngl all -c 4096 -b 4096 -ub 4096 -np 1 -fa on
-   ```
-   - `-ngl all` puts every layer on the GPU. With it and `-c` set, llama-server won't adjust them to fit, so a model that is too big fails to start instead of spilling into system memory.
-   - `-c 4096` is enough: each router request stands alone (your prompt clipped to 6,000 characters, the last two messages, the six questions), about 3,000 tokens at most, and nothing builds up over a session.
-   - `-b 4096 -ub 4096`: Clef and Laya evaluate the whole request in one batch, and the default of 512 tokens is too small.
-   - `-np 1`: the router sends one request at a time. `-fa on` saves memory; drop it if your GPU backend rejects it.
-   - Leave out the `mmproj` file: it is Clef's image projector, and the router sends text only. With `-hf` instead of `-m`, add `--no-mmproj`, because `-hf` loads it automatically.
-   - `--host 0.0.0.0` lets another machine reach it; add `--api-key <key>` to require a key.
-2. In `/plugin` → **Installed** → **decision-router** → **Configure options**:
-   - `backend`: `llamacpp`
-   - `local_url`: `http://<that machine>:9931`, or empty on the same machine. The host and port are enough.
-   - `local_api_key`: the `--api-key` value, if you set one
-   - `decision_model`: empty for a single-model server; the model's name on a server that hosts several
-3. Close the panel, send a prompt, and check `/router log`. llama.cpp's own messages come through: `too large to process. increase the physical batch size` means raising `-b` and `-ub`, and `llama-server is not running a decision model` means the loaded model can't answer `/v1/systemone`.
-
-### Clef with SGLang
-
-Set `backend` to `local`, `local_url` to `http://127.0.0.1:30000/v1/systemone`, and `decision_model` to `Cloudflare/clef-flash` or `Cloudflare/clef`.
-
-## Settings and keys
-
-- **All settings, keys included:** `/plugin` → **Installed** → **decision-router** → **Configure options**.
-- **Settings without keys** also appear on `/config` under decision-router. Claude Code never shows sensitive settings there.
-- **Keys from the shell**, if you prefer: `CLOUDFLARE_API_TOKEN`, `TYPESAFE_API_KEY` or `ROUTER_LOCAL_API_KEY`.
-- **Clearing a key:** the key fields can be replaced but not emptied, so enter `none` in one to clear it. `none` also stops the router from falling back to the shell variable.
-
-## Commands
-
-- `/router`: the quick menu (or the status as text where no one can answer it). Unknown words print the list of commands
-- `/router pane`: the pane with Now, Log and Tune
-- `/router setup`: choose a backend, find or name its server, test it and save the settings. Keys are never asked for in the dialog, since what you type there stays in the scrollback
-- `/router test`: send one request to the configured decision model and report the answer or the fault
-- `/router status`: the status as text, with the last decision-model error
-- `/router route | watch | off | on`: change the mode (remembered across sessions)
-- `/router pin haiku | sonnet | opus | fable`: run the next turn on that tier, or on the advisor's tier if that is lower
-- `/router log [n]`: the last decisions, with difficulty, confidence and corrections, and `leaned` where the decision model pointed at a different tier than the one used
-- `/router subagents`: what the router did for each subagent (see Routing subagents)
-- `/router subagents on | watch | off`: set the model of subagents, only record the picks, or leave subagents out (remembered across sessions)
-- `/router tune`: tier mix, where the decision model leaned before the confidence filter and the policy, how often you corrected the router up or down, decision-model latency, and which way to adjust
-
-## Routing subagents
-
-Without this, the router leaves subagents alone, and each one uses the model named in Claude's call or its own definition, then `CLAUDE_CODE_SUBAGENT_MODEL`, and otherwise the session's model. It does not follow the router's pick for the main conversation.
-
-`/router subagents on` makes the router set the model of a subagent as it starts. `/router subagents watch` works out the same picks but only records them, so each subagent still runs on its usual model. Both are off by default, and both stop while main routing is off or paused.
-
-| Subagent | What the router does |
-|---|---|
-| `Explore` (file search) | Haiku at once, without asking the decision model |
-| `general-purpose` | Asks the decision model about its task, then sets the tier and effort |
-| `Plan`, custom and plugin agents, forks, teammates, workflow agents, resumed runs, any call that names a model | Leaves it alone |
-
-- **It only moves down.** A subagent never goes above the model it would have used anyway, and never to Fable. The plan-usage caps and the Sonnet floor for security-sensitive work apply as they do for main turns.
-- **The router picks the model, not the subagent.** Claude still decides whether to delegate and to which subagent.
-- **A subagent waits at most one timeout** for the decision model (2.5 seconds hosted, 8 seconds local), then starts on its usual model. Questions go one at a time, and past eight waiting the rest start without asking. A server that stops answering stops holding subagents after three failures, for a minute at a time. With `watch`, nothing waits.
-- **Three tool errors** move a subagent up one tier, within the same limit and the advisor's tier, once, unless the advisor was consulted.
-- **`CLAUDE_CODE_SUBAGENT_MODEL_FORCE`** turns this off, since that setting has already decided.
-
-**Turning this on sends more text out.** The task text of each general subagent goes to your decision model, as main prompts do. With a hosted backend that means Cloudflare or TypeSafe, and task text often includes code and project details. With llama.cpp or Unsloth it stays on your server. The subagent log holds labels and numbers only.
-
-`/router subagents` reports how many subagents ran cheaper than usual and what share of their tokens that covers, plus tool errors and decision-model latency. Subagents keep their own log and failure count, and a request for a main turn goes first, so they do not affect `/router log`, `/router tune` or main routing.
-
-## Calibration
-
-Every decision is journaled (labels and numbers only, never prompt text) with what happened next: a manual override up or down, or an escalation. `/router tune` turns that into a suggestion. The weights and thresholds live at the top of `src/features.ts` and `src/policy.ts`, and the tests in `tests/core.test.ts` pin the behavior you'd want to keep while changing them.
-
-## Layout
-
-```
-hooks/router.ts      Claude Code events in, decisions out. The only file that calls the mods API.
-src/features.ts      Answers to a tier distribution
-src/policy.ts        When to switch; plan-usage gate; escalation
-src/spawn.ts         Subagent routing: which ones get a pick, the pick, escalation, and their log
-src/classifier.ts    Backends and the System One wire format
-src/journal.ts       Decision log and tuning
-src/tiers.ts         Models, efforts, availability fallback
-src/setup.ts         What /router setup offers and how it reads addresses
-src/view.ts          The band and the pane (claude-router's design)
-tests/               claude plugin test: unit tests and end-to-end tests of the hooks module
-scripts/             render-docs.sh: the README screenshots, drawn by the same code as the plugin, with an overflow check
-```
-
-Run the tests with `claude plugin test` and check the module with `claude plugin validate .`.
-
-## Credits
-
-The switching policy ports ideas from [claude-router](https://github.com/alexei-led/claude-router) by Alexei Ledenev (MIT): vote streaks, a cache-loss bar, holds after escalation, and no cheaper move mid-task. The band and pane follow its design.
+MIT licensed. The switching rules build on [claude-router](https://github.com/alexei-led/claude-router) by Alexei Ledenev.

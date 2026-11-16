@@ -43,11 +43,6 @@ export const SAMPLE_PROMPT = 'refactor the auth module to use async/await and ad
 
 /** Where to put a key the setup never asks for: typed into a dialog it would stay in the scrollback. */
 export function keyHelp(backend: Backend): string {
-  const [variable, name] =
-    backend === 'clef-workers'
-      ? ['CLOUDFLARE_API_TOKEN', 'Cloudflare API token']
-      : backend === 'jev-api'
-        ? ['TYPESAFE_API_KEY', 'TypeSafe API key']
-        : ['ROUTER_LOCAL_API_KEY', 'Local server API key'];
-  return `No ${name} found. Set ${variable} in your shell, or add it under /plugin > decision-router > Configure options, then run /router test.`;
+  const name = backend === 'clef-workers' ? 'Cloudflare API token' : backend === 'jev-api' ? 'TypeSafe API key' : 'server key';
+  return `No ${name} is saved. Add it in the plugin's settings (/plugin > decision-router > Configure options, or Customize > Plugins in the desktop app), then run /router test.`;
 }

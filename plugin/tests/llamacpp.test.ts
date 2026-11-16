@@ -132,7 +132,7 @@ test('a server that is not running a decision model says so', async ($, on) => {
 })
 
 test('the local key reaches llama-server as a bearer token', async ($, on) => {
-  const seen = stubs(on, { level: 1 }, { ROUTER_LOCAL_API_KEY: 'sk-local' })
+  const seen = stubs(on, { level: 1 }, { CLAUDE_PLUGIN_OPTION_LOCAL_API_KEY: 'sk-local' })
   await start($)
   await turn($, 't1', 'list the files')
   expect(seen.requests.every((r) => r.headers?.authorization === 'Bearer sk-local')).toBe(true)
@@ -154,8 +154,8 @@ test('the band names llama.cpp', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: 'llama.cpp · 8 s deadline' })).toBeDefined()
 })
 
-test('a key set to none sends no key, even with one in the shell', async ($, on) => {
-  const seen = stubs(on, { level: 1 }, { CLAUDE_PLUGIN_OPTION_LOCAL_API_KEY: 'none', ROUTER_LOCAL_API_KEY: 'sk-old' })
+test('a key set to none sends no key', async ($, on) => {
+  const seen = stubs(on, { level: 1 }, { CLAUDE_PLUGIN_OPTION_LOCAL_API_KEY: 'none' })
   await start($)
   await turn($, 't1', 'list the files')
   expect(seen.requests.length > 0).toBe(true)

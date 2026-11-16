@@ -1,4 +1,6 @@
-# claude-decision-router
+# Decision Router
+
+<img src="plugin/.claude-plugin/icon.png" alt="Decision Router icon" width="96" align="right">
 
 A Claude Code plugin that picks the Claude model for each turn, and for the subagents Claude starts if you turn that on, so your subscription goes further without you choosing models by hand.
 
@@ -19,14 +21,14 @@ Requires Claude Code 2.1.299 or later.
 
 ## Set up
 
-Run `/router setup`. It asks which decision model to use, finds your server (or asks for its address), sends one test request and saves the settings. It never asks for an API key.
+Run `/router setup`. It asks which decision model to use, finds your server (or asks for its address), sends one test request and saves the settings. It never asks for an API key in the dialog: keys go in the plugin's settings (`/plugin` > decision-router > Configure options, or Customize > Plugins in the desktop app), which keep them in your system's secure credential store.
 
 | You have | Choose | You need |
 |---|---|---|
 | llama.cpp | llama.cpp | `llama-server` running a decision model (below) |
 | Unsloth | Unsloth | Settings > API > Decision API > Serve requests turned on |
-| A Cloudflare account | Cloudflare Clef | Your account ID, and `CLOUDFLARE_API_TOKEN` in your shell |
-| A TypeSafe account | TypeSafe Jev | `TYPESAFE_API_KEY` in your shell |
+| A Cloudflare account | Cloudflare Clef | Your account ID, and a Workers AI token in the plugin's settings |
+| A TypeSafe account | TypeSafe Jev | An API key in the plugin's settings |
 
 **llama.cpp, in one command.** Download the Q8_0 build of Clef Flash (about 9.5 GB, fits a 16 GB GPU), then:
 
@@ -52,11 +54,13 @@ The router is careful about switching. It won't flip on one answer, and it holds
 
 You stay in control: `/model` pauses the router, and `/router pin opus` sets the next turn's model.
 
-**Privacy:** your prompt goes to the decision model, and with subagents on, so does each general subagent's task. With llama.cpp or Unsloth it stays on your server, and with Cloudflare or TypeSafe it goes to them. The router's own log never keeps prompt text.
+**The desktop app.** The plugin works in the Code tab of the Claude desktop app just as it does in the terminal. Install it from Customize > Plugins (Add marketplace `frankievalentine/claude-decision-router`, then Add plugin) and change its settings there. The band sits above the prompt and appears after the first message of a session.
+
+**Privacy:** your prompt goes to the decision model, and with subagents on, so does each general subagent's task. With llama.cpp or Unsloth it stays on your server, and with Cloudflare or TypeSafe it goes to them. The router's own log never keeps prompt text. The [privacy notice](PRIVACY.md) has the details.
 
 ## Use
 
-The router starts in **watch** mode: the band under the prompt shows what it would pick and why, and nothing changes. After a few days, when the picks look right:
+The router starts in **Watch only** mode: the band under the prompt shows what it would pick and why, and nothing changes. After a few days, when the picks look right:
 
 ```
 /router route
@@ -81,7 +85,7 @@ Run `claude plugin marketplace update decision-router-local`, then `claude plugi
 
 ## More
 
-[plugin/README.md](plugin/README.md) covers how a turn runs, the switching policy, every backend in detail (including SGLang), settings and keys, and the source layout.
+[plugin/README.md](plugin/README.md) is the short introduction shown in plugin listings. [The reference](plugin/docs/REFERENCE.md) covers how a turn runs, the switching policy, every backend in detail (including SGLang), every setting, and the source layout.
 
 To work on the plugin: clone the repository and run `claude --plugin-dir ./plugin`, which hot-reloads your edits. In `plugin/`, `claude plugin test` runs the tests, `claude plugin validate .` checks the plugin, and `scripts/render-docs.sh` regenerates the screenshots above and checks that nothing in the band or pane draws past its edge. Bump the version in `plugin/.claude-plugin/plugin.json` with each change you push, because `claude plugin update` compares versions.
 

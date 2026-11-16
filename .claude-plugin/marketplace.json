@@ -1,11 +1,17 @@
 {
   "name": "decision-router-local",
-  "owner": { "name": "claude-decision-router contributors" },
-  "description": "Marketplace for claude-decision-router, a per-turn Claude model router",
+  "owner": {
+    "name": "frankievalentine",
+    "url": "https://github.com/frankievalentine"
+  },
+  "description": "Decision Router: picks the right Claude model for every message.",
   "plugins": [
     {
       "name": "decision-router",
-      "description": "Per-turn Claude model routing: a decision model describes the task, a subscription-aware policy picks the model.",
+      "displayName": "Decision Router",
+      "description": "Picks the right Claude model for every message, so your plan lasts longer. Easy questions go to a faster model, hard problems to a stronger one.",
+      "category": "productivity",
+      "homepage": "https://github.com/frankievalentine/claude-decision-router#readme",
       "source": "./plugin"
     }
   ]

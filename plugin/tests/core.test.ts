@@ -6,6 +6,7 @@ import type { JournalRecord } from '../src/journal.ts'
 import { capOf, decide, escalate, usageCap, initialState } from '../src/policy.ts'
 import type { DecideInput } from '../src/policy.ts'
 import { appendSpawn, escalatedTier, isCheaper, kindOf, MAX_SPAWN_RECORDS, pickFor, recordOfSpawn, summarize } from '../src/spawn.ts'
+import { resolveOptions, savedChoices, settingLabel, upgradeSettings, valueOf } from '../src/settings.ts'
 import { advisorCeiling, routeFor, tierOfModel } from '../src/tiers.ts'
 import type { Features, Tier } from '../src/types.ts'
 
@@ -323,4 +324,33 @@ test('an escalation stops at the ceiling', () => {
   expect(escalatedTier('haiku', 'sonnet')).toBe('sonnet')
   expect(escalatedTier('sonnet', 'sonnet')).toBe(null)
   expect(escalatedTier('haiku', 'opus')).toBe('sonnet')
+})
+
+test('settings: labels and earlier values both read as the internal value', () => {
+  expect(valueOf('backend', 'llama.cpp server')).toBe('llamacpp')
+  expect(valueOf('backend', 'llamacpp')).toBe('llamacpp')
+  expect(valueOf('backend', 'clef-local')).toBe('local')
+  expect(valueOf('mode', 'Switch models')).toBe('route')
+  expect(valueOf('preference', 'nonsense')).toBe(undefined)
+  expect(settingLabel('preference', 'cost')).toBe('Save usage')
+  expect(resolveOptions({ mode: 'Watch only', backend: 'TypeSafe', preference: 'Balanced', local_url: 'x' })).toEqual({
+    mode: 'watch',
+    backend: 'jev-api',
+    preference: 'balanced',
+    local_url: 'x',
+  })
+  expect(savedChoices({ backend: 'local', mode: 'Off', preference: 7 })).toEqual({ backend: 'local', mode: 'off' })
+})
+
+test('settings: only this plugin\'s earlier values are relabelled, and nothing else changes', () => {
+  const other = { options: { mode: 'route' } }
+  const before = { theme: 'dark', pluginConfigs: { 'decision-router@market': { options: { backend: 'llamacpp', local_url: 'u' } }, 'other@m': other } }
+  const after = upgradeSettings(before)
+  expect(after.pluginConfigs['decision-router@market'].options).toEqual({ backend: 'llama.cpp server', local_url: 'u' })
+  expect(after.pluginConfigs['other@m']).toBe(other)
+  expect(after.theme).toBe('dark')
+  expect(before.pluginConfigs['decision-router@market'].options.backend).toBe('llamacpp')
+  const current = { pluginConfigs: { 'decision-router@market': { options: { backend: 'TypeSafe' } } } }
+  expect(upgradeSettings(current)).toBe(current)
+  expect(upgradeSettings(undefined)).toBe(undefined)
 })

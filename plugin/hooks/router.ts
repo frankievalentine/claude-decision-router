@@ -8,6 +8,7 @@ import { tierConfidence, tierDistribution } from '../src/features.ts';
 import { append, markEscalated, markOverride, recordOf, tune } from '../src/journal.ts';
 import type { JournalRecord } from '../src/journal.ts';
 import { decide, escalate, initialState, POLICY } from '../src/policy.ts';
+import { ownConfig, resolveOptions, savedChoices, settingLabel, upgradeSettings } from '../src/settings.ts';
 import { accountIdOf, backendOfAnswer, DEFAULT_LOCAL_URL, keyHelp, normalizeUrl, SAMPLE_PROMPT, SETUP_OPTIONS } from '../src/setup.ts';
 import { addUsage, appendSpawn, escalatedTier, isCheaper, kindOf, pickFor, recordOfSpawn, summarize, updateSpawn } from '../src/spawn.ts';
 import type { PickReason, SpawnKind, SpawnMode, SpawnRecord } from '../src/spawn.ts';
@@ -118,7 +119,16 @@ let advisorSeen: Tier | null = null;
 let advisedTurn: string | null = null;
 
 export function register(on: any, opts: Options) {
-  options = opts ?? {};
+  options = resolveOptions(opts ?? {});
+
+  // Versions before 0.12 saved the settings' pickers as internal values (llamacpp, route), which the pickers no longer
+  // list, so Claude Code would read them as unset. Every reader of the settings sees the label instead, and the saved
+  // choice stands until the person picks another.
+  on('settings.read', async ($: any, e: any, next: any) => {
+    const result = await next(e);
+    const upgraded = upgradeSettings(result?.value);
+    return upgraded === result?.value ? result : { ...result, value: upgraded };
+  });
 
   on('session.start', async ($: any, e: any, next: any) => {
     await $.command.register({
@@ -128,6 +138,7 @@ export function register(on: any, opts: Options) {
       immediate: true,
     });
     await migrate($);
+    await adoptSavedChoices($);
     mode = pick((await $.store.get(MODE_KEY)) ?? options.mode, ['watch', 'route', 'off'] as const, 'watch');
     detail = (await $.store.get(DETAIL_KEY)) === true;
     const saved = await $.store.get(JOURNAL_KEY);
@@ -404,6 +415,14 @@ async function migrate($: any) {
   }
 }
 
+// Claude Code may check the saved settings before this plugin's `settings.read` hook can relabel them, and then hand the
+// plugin defaults for a choice saved by an earlier version: take each picker's saved choice from the settings instead.
+async function adoptSavedChoices($: any) {
+  try {
+    options = { ...options, ...savedChoices(ownConfig(await $.settings.read())) };
+  } catch {}
+}
+
 async function setMode($: any, m: Mode) {
   paused = false;
   mode = m;
@@ -486,7 +505,7 @@ async function runTest($: any, endpoint: Endpoint, key: string | null, timeoutMs
 
 // /router test: the configured decision model, tried once.
 async function testText($: any): Promise<string> {
-  const account = options.cloudflare_account_id || (await $.env.get('CLOUDFLARE_ACCOUNT_ID'));
+  const account = options.cloudflare_account_id;
   const endpoint = endpointOf(account);
   if ('error' in endpoint) return `The decision model is not set up: ${endpoint.error}. Run /router setup.`;
   const key = await secretFor($, endpoint);
@@ -498,7 +517,7 @@ async function testText($: any): Promise<string> {
 }
 
 // /router setup: pick a backend, find or name the server, test it, and save what worked. Keys are never asked for in
-// the dialog: whatever is typed there stays in the scrollback, so they come from the shell or Configure options.
+// the dialog: whatever is typed there stays in the scrollback, so they come from the plugin's masked settings fields.
 async function setup($: any): Promise<string> {
   if (!(await $.session.surfaces()).length)
     return 'Setup asks questions, so it needs an interactive session. Settings are under /plugin > decision-router > Configure options.';
@@ -529,7 +548,7 @@ async function setupLocal($: any, backend: 'llamacpp' | 'local'): Promise<string
   };
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const result = await probe(url);
-    if (result.ok) return `${await save($, { backend, local_url: url })}\nThe decision model answered in ${result.ms} ms at ${hostOf(url)}. ${modeText()} ${nextStep()}`;
+    if (result.ok) return `${await save($, { backend: settingLabel('backend', backend), local_url: url })}\nThe decision model answered in ${result.ms} ms at ${hostOf(url)}. ${modeText()} ${nextStep()}`;
     const hint =
       backend === 'llamacpp'
         ? 'Start llama-server with a decision model such as Clef or Laya loaded (see the README).'
@@ -539,7 +558,7 @@ async function setupLocal($: any, backend: 'llamacpp' | 'local'): Promise<string
       header: 'Setup',
     });
     if (answer === 'Cancel setup') return 'Setup cancelled. Nothing was saved.';
-    if (answer === 'Save anyway') return `${await save($, { backend, local_url: url })}\nSaved without a working test. Run /router test once the server is up.`;
+    if (answer === 'Save anyway') return `${await save($, { backend: settingLabel('backend', backend), local_url: url })}\nSaved without a working test. Run /router test once the server is up.`;
     if (answer === 'Retry') continue;
     const typed = normalizeUrl(answer);
     if (typed) url = typed;
@@ -549,10 +568,10 @@ async function setupLocal($: any, backend: 'llamacpp' | 'local'): Promise<string
 }
 
 async function setupHosted($: any, backend: Backend): Promise<string> {
-  const values: Record<string, string> = { backend };
+  const values: Record<string, string> = { backend: settingLabel('backend', backend) };
   if (backend === 'clef-workers') {
-    // An account ID already in settings or the shell is used as it is; only one typed here is saved.
-    let account: string | null = options.cloudflare_account_id || (await $.env.get('CLOUDFLARE_ACCOUNT_ID')) || null;
+    // An account ID already in settings is used as it is; only one typed here is saved.
+    let account: string | null = options.cloudflare_account_id || null;
     while (!account) {
       const answer = await $.ui.ask('What is your Cloudflare account ID? Type it below (32 characters, shown on the Workers AI page).', {
         options: ['Cancel setup', 'Skip for now'],
@@ -564,12 +583,12 @@ async function setupHosted($: any, backend: Backend): Promise<string> {
       if (account) values.cloudflare_account_id = account;
       else $.ui.toast('That is not a Cloudflare account ID: it is 32 letters and digits.');
     }
-    if (!account) return `${await save($, values)}\nThe account ID is still missing: set CLOUDFLARE_ACCOUNT_ID, or add it under /plugin > decision-router > Configure options.`;
+    if (!account) return `${await save($, values)}\nThe account ID is still missing: add it in the plugin's settings (/plugin > decision-router > Configure options).`;
   }
   const saved = await save($, values);
   const endpoint = endpointFor({
     backend,
-    cloudflareAccountId: values.cloudflare_account_id || options.cloudflare_account_id || (await $.env.get('CLOUDFLARE_ACCOUNT_ID')),
+    cloudflareAccountId: values.cloudflare_account_id || options.cloudflare_account_id,
     decisionModel: options.decision_model,
   });
   if ('error' in endpoint) return `${saved}\n${endpoint.error}`;
@@ -583,10 +602,17 @@ async function setupHosted($: any, backend: Backend): Promise<string> {
 
 const nextStep = () => (mode === 'route' ? '' : 'Run /router route when the picks look right.');
 
-// Writes the plugin's own settings the way /config would. A refusal comes back as text.
+// Writes the plugin's own settings the way /config would. A refusal comes back as text. A session that draws no
+// /config rows for plugins has nothing to write to, so the person is told what to enter where.
 async function save($: any, values: Record<string, string>): Promise<string> {
   for (const [field, value] of Object.entries(values)) {
-    const result = await $.config.set({ key: `decision-router.${field}`, value });
+    let result: any;
+    try {
+      result = await $.config.set({ key: `decision-router.${field}`, value });
+    } catch {
+      const wanted = Object.entries(values).map(([k, v]) => `${k} = ${v}`).join(', ');
+      return `Could not save the settings from here. Enter them in the plugin's settings (/plugin > decision-router > Configure options, or Customize > Plugins in the desktop app): ${wanted}.`;
+    }
     if (result?.deny) return `Could not save ${field}: ${result.deny}`;
   }
   return `Saved: ${Object.entries(values).map(([k, v]) => `${k} = ${v}`).join(', ')}.`;
@@ -594,7 +620,7 @@ async function save($: any, values: Record<string, string>): Promise<string> {
 
 // The configured endpoint and its key, or why they are not usable.
 async function connectionOf($: any): Promise<{ endpoint: Endpoint; key: string | null } | { error: string }> {
-  const account = options.cloudflare_account_id || (await $.env.get('CLOUDFLARE_ACCOUNT_ID'));
+  const account = options.cloudflare_account_id;
   const endpoint = endpointOf(account);
   if ('error' in endpoint) return { error: endpoint.error };
   const key = await secretFor($, endpoint);
@@ -818,29 +844,18 @@ async function askSystemOne($: any, endpoint: Endpoint, key: string | null, prom
   return JSON.parse(response.text);
 }
 
-// Sensitive options may not reach `options`; Claude Code also exports every option to the environment.
+// Keys come only from the plugin's own settings. A sensitive option may not reach `options`, and Claude Code also hands
+// every option to the plugin as CLAUDE_PLUGIN_OPTION_<KEY>, so that is read too.
 async function secretFor($: any, endpoint: Endpoint): Promise<string | null> {
   if (endpoint.key === 'typesafe_api_key')
-    return pickKey(
-      options.typesafe_api_key,
-      await $.env.get('CLAUDE_PLUGIN_OPTION_TYPESAFE_API_KEY'),
-      await $.env.get('TYPESAFE_API_KEY'),
-    );
+    return pickKey(options.typesafe_api_key, await $.env.get('CLAUDE_PLUGIN_OPTION_TYPESAFE_API_KEY'));
   if (endpoint.key === 'cloudflare_api_token')
-    return pickKey(
-      options.cloudflare_api_token,
-      await $.env.get('CLAUDE_PLUGIN_OPTION_CLOUDFLARE_API_TOKEN'),
-      await $.env.get('CLOUDFLARE_API_TOKEN'),
-    );
-  return pickKey(
-    options.local_api_key,
-    await $.env.get('CLAUDE_PLUGIN_OPTION_LOCAL_API_KEY'),
-    await $.env.get('ROUTER_LOCAL_API_KEY'),
-  );
+    return pickKey(options.cloudflare_api_token, await $.env.get('CLAUDE_PLUGIN_OPTION_CLOUDFLARE_API_TOKEN'));
+  return pickKey(options.local_api_key, await $.env.get('CLAUDE_PLUGIN_OPTION_LOCAL_API_KEY'));
 }
 
 // Claude Code's key fields can be replaced but never emptied, so "none" (or "-", "off", "clear") in one means no key,
-// and stops the lookup there. The saved setting comes first, then the shell.
+// and stops the lookup there.
 const CLEARED = /^(none|-|off|clear)$/i;
 function pickKey(...values: unknown[]): string | null {
   for (const v of values) {

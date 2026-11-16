@@ -1,108 +1,117 @@
 {
   "name": "decision-router",
-  "version": "0.11.0",
-  "description": "Picks the Claude model for each turn, and optionally for subagents: a decision model (Clef or Jev) describes the task, and a policy tuned for subscription limits chooses Haiku, Sonnet, Opus or Fable.",
+  "displayName": "Decision Router",
+  "version": "0.12.0",
+  "description": "Picks the right Claude model for every message, so your plan lasts longer. Easy questions go to a faster model, hard problems to a stronger one, and you never have to switch models yourself.",
   "author": {
-    "name": "claude-decision-router contributors"
+    "name": "frankievalentine",
+    "url": "https://github.com/frankievalentine"
   },
+  "homepage": "https://github.com/frankievalentine/claude-decision-router#readme",
+  "repository": "https://github.com/frankievalentine/claude-decision-router",
   "license": "MIT",
   "keywords": [
-    "router",
     "model routing",
+    "usage limits",
     "subscription",
-    "clef",
-    "jev",
-    "mods"
+    "model picker",
+    "haiku",
+    "sonnet",
+    "opus"
   ],
+  "icon": "./.claude-plugin/icon.png",
+  "documentationUrl": "https://github.com/frankievalentine/claude-decision-router/blob/main/plugin/docs/REFERENCE.md",
+  "supportUrl": "https://github.com/frankievalentine/claude-decision-router/issues",
+  "privacyPolicyUrl": "https://github.com/frankievalentine/claude-decision-router/blob/main/PRIVACY.md",
   "userConfig": {
     "mode": {
       "type": "string",
       "title": "Mode",
-      "description": "watch shows the pick and changes nothing; route switches the model; off does nothing. /router changes it at any time.",
+      "description": "Watch only shows which model the router would pick, without changing anything. Switch models lets it change the model for you. You can also change this at any time with /router.",
       "options": [
-        "watch",
-        "route",
-        "off"
+        "Watch only",
+        "Switch models",
+        "Off"
       ],
-      "default": "watch"
+      "default": "Watch only"
+    },
+    "preference": {
+      "type": "string",
+      "title": "What matters more",
+      "description": "Save usage leans toward faster, lighter models so your plan lasts longer. Best answers leans toward stronger models.",
+      "options": [
+        "Save usage",
+        "Balanced",
+        "Best answers"
+      ],
+      "default": "Balanced"
+    },
+    "allow_fable": {
+      "type": "boolean",
+      "title": "Use Fable for the hardest tasks",
+      "description": "Lets the router choose Fable for very hard tasks. Fable may use your usage credits instead of your plan.",
+      "default": false
     },
     "backend": {
       "type": "string",
       "title": "Decision model",
-      "description": "clef-workers: Clef Flash on Cloudflare Workers AI. jev-api: Jev on TypeSafe's API (Jev runs only there). local: a System One server you run, such as Unsloth or Clef on SGLang. llamacpp: llama.cpp's llama-server running a decision model such as Clef or Laya.",
+      "description": "A small model that reads each message and rates how hard it is. Use a hosted service, or run one on your own computer so your messages stay with you.",
       "options": [
-        "clef-workers",
-        "jev-api",
-        "local",
-        "llamacpp"
+        "Cloudflare Workers AI",
+        "TypeSafe",
+        "llama.cpp server",
+        "Unsloth or SGLang server"
       ],
-      "default": "clef-workers"
+      "default": "Cloudflare Workers AI"
     },
-    "preference": {
+    "local_url": {
       "type": "string",
-      "title": "Preference",
-      "description": "cost leans toward cheaper models and saves plan usage; quality leans toward stronger ones.",
-      "options": [
-        "cost",
-        "balanced",
-        "quality"
-      ],
-      "default": "balanced"
+      "title": "Server address",
+      "description": "For llama.cpp, Unsloth or SGLang. Leave empty when the server runs on this computer on its usual port. Example: http://10.0.0.9:9931",
+      "default": ""
     },
-    "allow_fable": {
-      "type": "boolean",
-      "title": "Allow Fable",
-      "description": "Let very hard, non-security tasks run on Fable 5.1. Fable may bill to usage credits rather than your plan.",
-      "default": false
-    },
-    "min_confidence": {
-      "type": "number",
-      "title": "Minimum confidence",
-      "description": "Below this confidence in the tier the decision model points to (0 spread evenly over the tiers, 1 certain, computed the same way for every backend), the current model is kept. A task split between two difficulty levels that map to the same tier still counts as certain.",
-      "default": 0.45,
-      "min": 0,
-      "max": 1
+    "local_api_key": {
+      "type": "string",
+      "title": "Server key",
+      "description": "For llama.cpp, Unsloth or SGLang, only if your server asks for a key. To remove a saved key, enter none.",
+      "sensitive": true
     },
     "cloudflare_account_id": {
       "type": "string",
       "title": "Cloudflare account ID",
-      "description": "For clef-workers. Not a secret.",
+      "description": "For Cloudflare. You'll find it on the Workers AI page of your Cloudflare dashboard.",
       "default": ""
     },
     "cloudflare_api_token": {
       "type": "string",
       "title": "Cloudflare API token",
-      "description": "Workers AI token for clef-workers. Scope it to Workers AI only. To clear a saved key, enter none.",
+      "description": "For Cloudflare. Create a token that can only use Workers AI. To remove a saved token, enter none.",
       "sensitive": true
     },
     "typesafe_api_key": {
       "type": "string",
       "title": "TypeSafe API key",
-      "description": "For jev-api. To clear a saved key, enter none.",
-      "sensitive": true
-    },
-    "local_url": {
-      "type": "string",
-      "title": "Local server URL",
-      "description": "Address of the server for local or llamacpp. Empty uses http://127.0.0.1:8888/v1/systemone for local (Unsloth) and http://127.0.0.1:9931 for llamacpp. For llamacpp, the host and port are enough, for example http://10.0.0.9:9931.",
-      "default": ""
-    },
-    "local_api_key": {
-      "type": "string",
-      "title": "Local server API key",
-      "description": "Bearer key for local or llamacpp, such as an Unsloth sk-unsloth- token or llama-server's --api-key. Leave empty for a keyless server. To clear a saved key, enter none.",
+      "description": "For TypeSafe. To remove a saved key, enter none.",
       "sensitive": true
     },
     "decision_model": {
       "type": "string",
-      "title": "Decision model ID",
-      "description": "The model to ask. Empty uses each backend's default: clef-flash on Workers AI, jev-latest on TypeSafe, default on a local server (Unsloth's selected model), and none for llamacpp (a single-model llama-server needs no name). For Clef on SGLang, use Cloudflare/clef-flash.",
+      "title": "Model name (advanced)",
+      "description": "Leave empty to use the usual model for your decision model. Set it only when your server runs several models.",
       "default": ""
+    },
+    "min_confidence": {
+      "type": "number",
+      "title": "Confidence needed to switch (advanced)",
+      "description": "How sure the decision model must be before the router changes models. Higher means fewer switches. The default is 0.45.",
+      "default": 0.45,
+      "min": 0,
+      "max": 1
     },
     "timeout_ms": {
       "type": "number",
-      "title": "Decision model timeout (ms)",
-      "description": "How long to wait for the decision model before keeping the current model. 0 picks it for you: 2500 for hosted backends, 8000 for local.",
+      "title": "Wait time in milliseconds (advanced)",
+      "description": "How long to wait for the decision model before keeping your current model. 0 uses the default: 2.5 seconds for hosted services and 8 seconds for your own server.",
       "default": 0,
       "min": 0,
       "max": 30000
