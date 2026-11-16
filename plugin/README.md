@@ -27,33 +27,13 @@ Type `/router` at any time for a quick menu: switch modes, choose the model for 
 
 ## Works in the terminal and the desktop app
 
-Decision Router works wherever Claude Code runs: the terminal, your editor, and the Code tab of the Claude desktop app. In the desktop app, its status line appears above the prompt after your first message.
+Decision Router works wherever Claude Code runs: the terminal, your editor, and the Code tab of the Claude desktop app. In the desktop app, the status line appears above the prompt after your first message. The app doesn't run `/router` commands, so click **Router options** on the status line instead, and choose the decision model in the plugin's settings (Customize > Plugins).
 
-The desktop app doesn't run `/router` commands. Click **Router** at the end of the status line for the quick menu and **Status and settings**, and choose the decision model and add keys in the plugin's settings (Customize > Plugins). The model picker under the prompt keeps showing the model you chose for the session: the router changes the model one message at a time, and the check mark on the status line confirms which one answered.
+The model picker keeps showing the model you chose for the session, since the router changes the model one message at a time. A check mark on the status line confirms which model answered. It also works alongside Claude Code's `/advisor`: it never picks a model stronger than your advisor.
 
-It also works alongside Claude Code's `/advisor`: it never picks a model stronger than your advisor, so the advisor keeps working.
-
-## Screenshots
-
-### Claude Code (terminal)
-
-The band under the prompt, with the model the router picked and why:
-
-![The band in the terminal, under the permission mode](docs/band.png)
-
-**Status and settings** (`/router pane`): the current pick, plan usage, the decision log and tuning:
-
-![Status and settings in the terminal](docs/pane.png)
-
-### Claude desktop app
-
-The band above the prompt in the Code tab, after the first message of a session:
-
-![The band above the prompt in the desktop app](docs/desktop-band.png)
-
-The quick menu, opened with **Router** at the end of the band:
-
-![The quick menu in the desktop app, opened from the band's Router button](docs/desktop-menu.png)
+| Status and settings, terminal | Quick menu, desktop app |
+|---|---|
+| ![Status and settings in the terminal](docs/pane.png) | ![The quick menu in the desktop app](docs/desktop-menu.png) |
 
 ## What it sends, and where
 
