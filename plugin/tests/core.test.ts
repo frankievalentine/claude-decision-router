@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { backendOf, confidenceOf, endpointFor, hostOf, parseAnswers, systemOneUrl, warmupBody } from '../src/classifier.ts'
+import { backendOf, confidenceOf, endpointFor, hostOf, parseAnswers, stillRunning, systemOneUrl, warmupBody } from '../src/classifier.ts'
 import { mostLikely, tierConfidence, tierDistribution } from '../src/features.ts'
 import { reasonText } from '../src/view.ts'
 import { append, markAnswered, markOverride, recordOf, tune } from '../src/journal.ts'
@@ -9,7 +9,7 @@ import type { DecideInput } from '../src/policy.ts'
 import { appendSpawn, escalatedTier, isCheaper, kindOf, MAX_SPAWN_RECORDS, pickFor, recordOfSpawn, summarize } from '../src/spawn.ts'
 import { resolveOptions, savedChoices, settingLabel, upgradeSettings, valueOf } from '../src/settings.ts'
 import { advisorCeiling, advisorRank, advisorRuns, routeFor, sameModel, tierOfModel } from '../src/tiers.ts'
-import type { Features, Tier } from '../src/types.ts'
+import type { Activity, Features, Scope, Tier } from '../src/types.ts'
 
 // A features object with difficulty concentrated on `level` (0-4).
 function features(level: number, extra: Partial<Features> = {}): Features {
@@ -27,6 +27,10 @@ function features(level: number, extra: Partial<Features> = {}): Features {
     continuation: 0,
     ...extra,
   }
+}
+// An answer the way decision models tend to give it: mostly easy, a little trivial or moderate.
+function task(activity: Activity, scope: Scope, reasoning: number, difficulty = [0.1, 0.7, 0.2, 0, 0], extra: Partial<Features> = {}): Features {
+  return { difficulty, confidence: 0.9, reasoning, scope: { [scope]: 1 }, activity: { [activity]: 1 }, security: 0, continuation: 0, ...extra }
 }
 const SETTINGS = { preference: 'balanced', allowFable: true } as const
 const dist = (f: Features) => tierDistribution(f, SETTINGS)
@@ -69,10 +73,45 @@ test('the distribution keeps uncertainty instead of one tier', async () => {
   expect((d.sonnet ?? 0) > 0.3 && (d.opus ?? 0) > 0.3).toBe(true)
 })
 
-test('first decision takes the most likely tier', async () => {
-  const d = decide(input({ distribution: dist(features(3)) }))
-  expect(d.tier).toBe('opus')
-  expect(d.reason).toBe('first')
+test('Best answers puts easy code across a few files on Opus, where Balanced keeps Sonnet', async () => {
+  const code = task('code', 'few_files', 1)
+  expect(mostLikely(tierDistribution(code, { preference: 'quality', allowFable: false }))).toBe('opus')
+  expect(mostLikely(tierDistribution(code, { preference: 'balanced', allowFable: false }))).toBe('sonnet')
+  // Easy reading in a few files stays on Sonnet, and trivial docs on Haiku, even on Best answers.
+  expect(mostLikely(tierDistribution(task('explore', 'few_files', 1), { preference: 'quality', allowFable: false }))).toBe('sonnet')
+  const trivial = task('docs', 'spot', 0.3, [0.8, 0.2, 0, 0, 0])
+  expect(mostLikely(tierDistribution(trivial, { preference: 'quality', allowFable: false }))).toBe('haiku')
+})
+
+test('Best answers opens Fable to hard work with substantial reasoning; Balanced still needs very hard', async () => {
+  const hard = task('debug', 'many_files', 2.4, [0, 0, 0.2, 0.6, 0.2])
+  expect(mostLikely(tierDistribution(hard, { preference: 'quality', allowFable: true }))).toBe('fable')
+  expect(mostLikely(tierDistribution(hard, { preference: 'balanced', allowFable: true }))).toBe('opus')
+  // Still gated: Fable off, shallow reasoning, or security work.
+  expect(mostLikely(tierDistribution(hard, { preference: 'quality', allowFable: false }))).toBe('opus')
+  expect(mostLikely(tierDistribution({ ...hard, reasoning: 1.5 }, { preference: 'quality', allowFable: true }))).toBe('opus')
+  expect(mostLikely(tierDistribution({ ...hard, security: 0.8 }, { preference: 'quality', allowFable: true }))).toBe('opus')
+})
+
+test("the first decision moves from the session's model like any other", async () => {
+  const up = decide(input({ distribution: dist(features(3)) }))
+  expect(up).toMatchObject({ tier: 'opus', reason: 'upgrade' })
+  // An Opus session keeps Opus on one easy answer, and moves down on the second.
+  const one = decide(input({ baseline: 'opus', distribution: dist(features(0)) }))
+  expect(one).toMatchObject({ tier: 'opus', reason: 'stay' })
+  expect(reasonText(one)).toBe('… waiting to go down')
+  const two = decide(input({ state: one.state, baseline: 'opus', distribution: dist(features(0)) }))
+  expect(two).toMatchObject({ tier: 'haiku', reason: 'downgrade' })
+})
+
+test('an unsure or missing answer keeps the session on its own model', async () => {
+  expect(decide(input({ baseline: 'opus', distribution: dist(features(1)), confidence: 0.2 })).tier).toBe('opus')
+  expect(decide(input({ baseline: 'opus', distribution: null }))).toMatchObject({ tier: 'opus', reason: 'no-advice' })
+})
+
+test("a session model above the cap steps down to it on the first turn", async () => {
+  expect(decide(input({ baseline: 'fable', usage: { usedPercent: 80 }, distribution: null }))).toMatchObject({ tier: 'opus', reason: 'usage-cap' })
+  expect(decide(input({ baseline: 'opus', advisor: 'sonnet', distribution: dist(features(3)) }))).toMatchObject({ tier: 'sonnet', reason: 'advisor-cap' })
 })
 
 test('a moderate answer does not switch on one vote', async () => {
@@ -208,6 +247,57 @@ test('answers parse, including the Workers AI wrapper', async () => {
   expect(f.reasoning).toBe(2)
   expect(f.activity.debug).toBe(0.8)
   expect(() => parseAnswers({ answers: { scope: answers.scope } })).toThrow()
+})
+
+test('a Fable session with Fable off is not voted down by answers that cannot name Fable', async () => {
+  const off = { preference: 'balanced', allowFable: false } as const
+  const fable = (over: Partial<DecideInput>) => input({ baseline: 'fable', top: 'opus', ...over })
+  // Hard work points at Opus, the strongest tier the answers can name: the session keeps Fable.
+  const hard = tierDistribution(features(3), off)
+  const one = decide(fable({ distribution: hard }))
+  const two = decide(fable({ state: one.state, distribution: hard }))
+  expect(two).toMatchObject({ tier: 'fable', reason: 'stay' })
+  // Easy work still moves down on the second answer, below Opus.
+  const easy = tierDistribution(features(0), off)
+  const first = decide(fable({ distribution: easy }))
+  expect(first.tier).toBe('fable')
+  expect(decide(fable({ state: first.state, distribution: easy }))).toMatchObject({ tier: 'haiku', reason: 'downgrade' })
+  // The plan's cap still steps it down.
+  expect(decide(fable({ distribution: hard, usage: { usedPercent: 80 } }))).toMatchObject({ tier: 'opus', reason: 'usage-cap' })
+})
+
+test('no move to a model whose context window the conversation has outgrown', async () => {
+  const windows = { haiku: 200_000, sonnet: 1_000_000, opus: 1_000_000, fable: 1_000_000 }
+  const state = { tier: 'opus' as Tier, votes: ['haiku' as Tier], hold: 0 }
+  const easy = { haiku: 0.95, sonnet: 0.05 }
+  expect(decide(input({ state, distribution: easy, windows, contextTokens: 100_000 })).tier).toBe('haiku')
+  // Past 90% of Haiku's window, the move goes to the cheapest tier that still holds the conversation.
+  expect(decide(input({ state, distribution: easy, windows, contextTokens: 190_000 }))).toMatchObject({ tier: 'sonnet', reason: 'downgrade' })
+  const up = { tier: 'haiku' as Tier, votes: [], hold: 0 }
+  const small = { haiku: 1_000_000, sonnet: 200_000, opus: 200_000, fable: 200_000 }
+  expect(decide(input({ state: up, distribution: { opus: 0.95, sonnet: 0.05 }, windows: small, contextTokens: 190_000 })).tier).toBe('haiku')
+})
+
+test('a request holds the next one back for a minute at most', async () => {
+  expect(stillRunning(null, 5_000)).toBe(false)
+  expect(stillRunning(1_000, 5_000)).toBe(true)
+  expect(stillRunning(1_000, 61_000)).toBe(false)
+})
+
+test('each record keeps the full answers, the Priority and the context size, rounded', async () => {
+  const f = { ...features(2), reasoning: 1.23456, security: 0.123456 }
+  const decision = decide(input({ distribution: dist(f) }))
+  const r = recordOf({ at: 1, mode: 'route', decision, features: f, usedPercent: 10, latencyMs: 100, error: null, preference: 'quality', contextTokens: 42_000 })
+  expect(r.answers).toEqual({
+    difficulty: [0, 0.05, 0.9, 0.05, 0],
+    reasoning: 1.23,
+    scope: { spot: 0, file: 1, many_files: 0 },
+    activity: { code: 1 },
+    security: 0.12,
+    continuation: 0,
+  })
+  expect(r).toMatchObject({ preference: 'quality', contextTokens: 42_000 })
+  expect(recordOf({ at: 1, mode: 'route', decision, features: null, usedPercent: 10, latencyMs: null, error: 'down' }).answers).toBe(null)
 })
 
 test('the journal tunes from corrections', async () => {

@@ -89,13 +89,15 @@ test('llama-server warms up, then gets one /v1/systemone request per turn', LLAM
   const seen = stubs(on, { level: 0 })
   await start($)
   await turn($, 't1', 'where is the config loaded?')
+  await turn($, 't2', 'and where is it read?')
   expect(seen.requests.every((r) => r.url === 'http://10.0.0.9:9931/v1/systemone')).toBe(true)
   const warm = seen.requests.filter((r) => Object.keys(r.body?.questions ?? {}).length === 1)
   expect(warm.length).toBe(1)
-  expect(asks(seen).length).toBe(1)
+  expect(asks(seen).length).toBe(2)
   // A single-model server needs no model name.
   expect(asks(seen)[0].body.model).toBeUndefined()
-  expect(seen.models[0]).toBe('claude-haiku-5-5')
+  // The Opus session moves down once two answers agree.
+  expect(seen.models).toEqual(['claude-opus-5-5', 'claude-haiku-5-5'])
 })
 
 test('a very hard task from llama-server goes to Opus', LLAMA, async ($, on) => {
@@ -129,7 +131,8 @@ test('a server that is not running a decision model says so', LLAMA, async ($, o
   const seen = stubs(on, { reply: () => ({ status: 501, body: { error: { message: 'not a decision model' } } }) })
   await start($)
   await turn($, 't1', 'list the files')
-  expect(seen.models[0]).toBe('claude-sonnet-5-5')
+  // No answer keeps the session's model.
+  expect(seen.models[0]).toBe('claude-opus-5-5')
   const log = await $.command.run({ command: 'router', args: 'log' })
   expect(log.text).toMatch(/HTTP 501 from 10\.0\.0\.9:9931: llama-server is not running a decision model \(Laya, Clef\)/)
 })

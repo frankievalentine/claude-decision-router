@@ -11,10 +11,10 @@ A decision model (Cloudflare's Clef or TypeSafe's Jev) **describes** each task: 
 ## How a turn runs
 
 1. **`turn.start`**: the request to the decision model starts as soon as the turn exists, so its answer is usually ready by the first model request. A turn with no typed text (a continuation) asks nothing and keeps its route.
-2. **First `turn.step`**: the answers become a tier distribution (`src/features.ts`), and the policy (`src/policy.ts`) decides whether to move.
+2. **First `turn.step`**: the answers become a tier distribution (`src/features.ts`), and the policy (`src/policy.ts`) decides whether to move. Routing starts from your session's model, so the first turn of a session needs the same evidence to move as any other.
 3. **Every `turn.step`** of the main conversation runs on the chosen model and effort. Subagents have their own routing, which is off by default (see Routing subagents).
 4. **Three tool errors in a turn** move up one tier for the rest of it, then hold for two turns. Only in Switch models mode, never on a pinned turn, and not to Fable unless it is allowed.
-5. **Picking a model yourself** with `/model` pauses routing for the session and records the correction.
+5. **Picking a model yourself** with `/model` pauses routing for the session and records the correction. When you turn routing back on, it starts from the model you picked.
 6. **`ultrathink` is respected**: a request Claude Code raised to `xhigh` or `max` keeps that effort on whichever model the router picks.
 7. **A pin** (`/router pin opus`, or the pane's buttons) runs the next turn on that tier without asking the decision model, then routing carries on where it was.
 
@@ -35,10 +35,14 @@ A decision model (Cloudflare's Clef or TypeSafe's Jev) **describes** each task: 
 
 ## The policy
 
+- **Your model is the starting point.** Each session starts on the model you chose. A move away from it needs the same evidence as any later move, so an easy first prompt in an Opus session stays on Opus and a second one moves down.
+- **A model the answers cannot name is not voted away.** With Use Fable off the answers can point no higher than Opus, so in a Fable session they count for Fable: hard work stays on it, and only easy work moves down, to Sonnet or Haiku.
+- **The same tier means the same model.** When the pick is the tier a request already asks for, the request's model is left as it is, context variant and version included (`opus[1m]`, an earlier Opus). Effort is still set.
+- **The conversation has to fit.** No move goes to a model unless the conversation fits in 90% of its context window.
 - **Evidence before switching.** A move up needs enough probability above the current tier on two consecutive turns, or one strong answer. A move down needs a clear majority on two turns, and never happens in the middle of a task.
 - **The prompt cache counts.** Switching models discards the cached conversation, so the bar rises with the size of the context.
 - **Plan usage.** As the higher of your 5-hour and weekly usage passes 50%, 75% and 90%, moving up gets harder and moving down easier. From 75% the top tier is Opus; from 95%, Sonnet.
-- **Fable** (off by default) is used only when the decision model rates a task very hard, never for security-sensitive work, and not past 75% usage. It may bill to usage credits. Tool-error escalation stops at Opus unless Fable is allowed, and a subagent never escalates to it.
+- **Fable** (off by default) is used only when the decision model rates a task very hard (on Best answers: hard or very hard, with substantial reasoning), never for security-sensitive work, and not past 75% usage. It may bill to usage credits. Tool-error escalation stops at Opus unless Fable is allowed, and a subagent never escalates to it.
 - **Security-sensitive work** runs on Sonnet or above.
 - **Fails open.** A missing key, a dead server, a timeout or a low-confidence answer leaves your current model alone. Three failures in a row pause the decision model for a minute.
 - **The advisor.** Claude Code's [advisor](https://code.claude.com/docs/en/advisor) only works with a main model at or below it, and a main model above it runs without one. With `advisorModel` set, routing, pins and escalations stay at the strongest tier your advisor still applies to: Opus or below for an Opus advisor, Sonnet or below for a Sonnet one. The router reads the setting at session start, before each turn and on `/router`, so a change with `/advisor` applies from the next turn. It ignores it when `CLAUDE_CODE_DISABLE_ADVISOR_TOOL` is set, and shows it on the band, the pane and `/router status`.
@@ -88,7 +92,7 @@ All four use the same System One request format. Inside the code they are `clef-
    - **Model name**: empty for the model selected in Unsloth, or `laya`
 4. Close the panel; Claude Code reloads the plugin.
 
-The router sends a small warm-up request at session start so the server loads its model before your first prompt (Unsloth takes 10 to 20 seconds the first time). Local backends wait up to 8 seconds per answer and hosted ones 2.5; `timeout_ms` overrides both. While a request is still running, no new one is sent, so a slow server never builds up a backlog.
+The router sends a small warm-up request at session start so the server loads its model before your first prompt (Unsloth takes 10 to 20 seconds the first time). Local backends wait up to 8 seconds per answer and hosted ones 2.5; `timeout_ms` overrides both. While a request is still running, no new one is sent, so a slow server never builds up a backlog; one that has not settled after a minute is given up on.
 
 The router ignores each server's own `confidence` field, which Unsloth computes differently from Jev, and computes confidence itself, from the tier the answer points to: 0 when the probability is spread evenly over Haiku, Sonnet and Opus, 1 when one tier holds it all. A task split between two difficulty levels that map to the same tier is therefore not low confidence, and `min_confidence` means the same thing on every backend.
 
@@ -129,7 +133,7 @@ Set **Decision model** to Unsloth or SGLang server, **Server address** to `http:
 | Setting | What it does |
 |---|---|
 | Mode | Watch only (show the pick, change nothing), Switch models, or Off. `/router`, the band and the pane change it too; the latest change, there or in this setting, wins |
-| Priority | Save usage, Balanced or Best answers: how readily the router reaches for a stronger model |
+| Priority | Save usage, Balanced or Best answers: how readily the router reaches for a stronger model. Best answers sends easy coding work across a few files to Opus, keeps easy reading and commands on Sonnet, and opens Fable, when allowed, to hard work that needs substantial reasoning |
 | Use Fable | Lets very hard, non-security tasks run on Fable 5.2, which may bill to usage credits. The switch in Status and settings changes it too, and works in the desktop app, where a session cannot save plugin settings: the switch is kept in the plugin's storage, and the latest change, the switch or this setting, wins |
 | Decision model | Where the decision model runs (see Backends) |
 | Server address, Server key | For llama.cpp, Unsloth or SGLang |
@@ -177,7 +181,7 @@ Without this, the router leaves subagents alone, and each one uses the model nam
 
 ## Calibration
 
-Every decision is journaled (labels and numbers only, never prompt text) with what happened next: a manual override up or down, or an escalation. `/router tune` turns that into a suggestion. The weights and thresholds live at the top of `src/features.ts` and `src/policy.ts`, and the tests in `tests/core.test.ts` pin the behavior you'd want to keep while changing them.
+Every decision is journaled (labels and numbers only, never prompt text) with what happened next: a manual override up or down, or an escalation. From 0.13 each record also keeps the decision model's full answers (rounded probabilities), the Priority and the context size, so a decision can be worked out again under other settings. `/router tune` turns that into a suggestion. The weights, the thresholds and Fable gate for each Priority, and the switching bars live at the top of `src/features.ts` and `src/policy.ts`, and the tests in `tests/core.test.ts` pin the behavior you'd want to keep while changing them.
 
 ## Layout
 

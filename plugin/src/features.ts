@@ -2,24 +2,36 @@
 // probability for each tier. Keeping the uncertainty (a distribution, not one tier) lets the policy require evidence
 // before switching, which protects the prompt cache.
 
-import type { Activity, Distribution, Features, Scope, Settings, Tier } from './types.ts';
+import type { Activity, Distribution, Features, Preference, Scope, Settings, Tier } from './types.ts';
+
+/** Fable needs `share` of the probability on difficulty `level` or above, and expected reasoning of at least `reasoning`. */
+export type FableGate = { level: number; share: number; reasoning: number };
 
 export type FeatureWeights = {
   difficulty: number;
   reasoning: number;
   scope: number;
-  /** Demand below thresholds[0] is Haiku work, below [1] Sonnet, below [2] Opus, above that Fable. */
-  thresholds: [number, number, number];
-  /** Fable needs this much probability on "very hard" (difficulty level 4). */
-  fableMinVeryHard: number;
+  /** For each Priority: demand below [0] is Haiku work, below [1] Sonnet, below [2] Opus, above that Fable. */
+  thresholds: Record<Preference, [number, number, number]>;
+  fable: Record<Preference, FableGate>;
 };
 
 export const WEIGHTS: FeatureWeights = {
   difficulty: 0.5,
   reasoning: 0.3,
   scope: 0.2,
-  thresholds: [0.22, 0.5, 0.82],
-  fableMinVeryHard: 0.5,
+  // Decision models rate most coding work easy or moderate. Best answers puts the Opus edge where easy work across a
+  // few files reaches it, and opens Fable to hard work that needs substantial reasoning, not only to very hard work.
+  thresholds: {
+    cost: [0.28, 0.56, 0.88],
+    balanced: [0.22, 0.5, 0.82],
+    quality: [0.1, 0.28, 0.66],
+  },
+  fable: {
+    cost: { level: 4, share: 0.5, reasoning: 0 },
+    balanced: { level: 4, share: 0.5, reasoning: 0 },
+    quality: { level: 3, share: 0.5, reasoning: 2 },
+  },
 };
 
 const SCOPE_WEIGHT: Record<Scope, number> = { spot: 0, file: 0.25, few_files: 0.5, many_files: 0.75, system: 1 };
@@ -32,9 +44,6 @@ const ACTIVITY_BIAS: Record<Activity, number> = {
   debug: 0.05,
   plan: 0.08,
 };
-// Preference moves the demand thresholds: cost raises them (cheaper tiers), quality lowers them.
-const PREFERENCE_SHIFT = { cost: 0.06, balanced: 0, quality: -0.06 };
-
 const TIER_NAMES: Tier[] = ['haiku', 'sonnet', 'opus', 'fable'];
 const clamp = (x: number, lo = 0, hi = 1): number => Math.min(hi, Math.max(lo, x));
 
@@ -62,8 +71,7 @@ export function tierDistribution(
   settings: Pick<Settings, 'preference' | 'allowFable'>,
   w: FeatureWeights = WEIGHTS,
 ): Distribution<Tier> {
-  const shift = PREFERENCE_SHIFT[settings.preference];
-  const [a, b, c] = w.thresholds.map((t) => t + shift);
+  const [a, b, c] = w.thresholds[settings.preference];
   const dist: Record<Tier, number> = { haiku: 0, sonnet: 0, opus: 0, fable: 0 };
   const total = f.difficulty.reduce((s, p) => s + p, 0) || 1;
   f.difficulty.forEach((p, level) => {
@@ -71,10 +79,11 @@ export function tierDistribution(
     const tier: Tier = d < a ? 'haiku' : d < b ? 'sonnet' : d < c ? 'opus' : 'fable';
     dist[tier] += p / total;
   });
-  // Fable is the most expensive tier and may bill to usage credits: it needs a clear "very hard" answer, and it is
-  // never used for security-sensitive work (Fable carries extra safety measures for cybersecurity).
-  const veryHard = (f.difficulty[4] ?? 0) / total;
-  if (!settings.allowFable || veryHard < w.fableMinVeryHard || f.security >= 0.5) {
+  // Fable is the most expensive tier and may bill to usage credits: it needs a clear answer that the task is hard enough,
+  // and it is never used for security-sensitive work (Fable carries extra safety measures for cybersecurity).
+  const gate = w.fable[settings.preference];
+  const hard = f.difficulty.slice(gate.level).reduce((s, p) => s + p, 0) / total;
+  if (!settings.allowFable || hard < gate.share || f.reasoning < gate.reasoning || f.security >= 0.5) {
     dist.opus += dist.fable;
     dist.fable = 0;
   }

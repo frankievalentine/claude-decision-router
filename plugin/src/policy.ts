@@ -4,7 +4,7 @@
 // limit. Pure: every input is an argument.
 
 import { mostLikely } from './features.ts';
-import { rank, TIERS } from './tiers.ts';
+import { CONTEXT_WINDOW, rank, TIERS } from './tiers.ts';
 import type { Decision, Distribution, PlanUsage, PolicyState, Preference, Reason, Tier } from './types.ts';
 
 export const POLICY = {
@@ -28,6 +28,8 @@ export const POLICY = {
   holdTurns: 2,
   /** Tool errors in one turn that escalate to the next tier. */
   escalateAfterErrors: 3,
+  /** A move needs the conversation to fit in this share of the target model's context window. */
+  windowShare: 0.9,
 };
 
 /** [percent used, how much both bars move]: as the plan fills, moving up gets harder and moving down easier. */
@@ -94,9 +96,18 @@ export type DecideInput = {
   contextTokens: number | null;
   preference: Preference;
   minConfidence: number;
+  /** The session's own tier, where routing starts: the first decision moves from it like any other. */
   baseline: Tier;
   /** The strongest tier the session's advisor applies to, or null without an advisor. */
   advisor?: Tier | null;
+  /**
+   * The strongest tier the distribution can name: Opus while Fable may not be picked. A session on a model above it
+   * is not voted down by answers that could never have pointed at that model: they count for it, and only a move
+   * below `top` is a real move down.
+   */
+  top?: Tier;
+  /** Context windows by tier, in tokens. */
+  windows?: Record<Tier, number>;
 };
 
 export function decide(input: DecideInput): Decision {
@@ -118,9 +129,9 @@ export function decide(input: DecideInput): Decision {
     state: { ...next, tier },
   });
 
-  // Over the cap (the plan filled up, or an advisor was set, while a tier ran): step down to the cap whatever the
-  // advice says.
-  if (state.tier && rank(state.tier) > rank(cap))
+  // Over the cap (the plan filled up, or an advisor was set, while a tier ran, or the session's model is above it):
+  // step down to the cap whatever the advice says.
+  if (rank(incumbent) > rank(cap))
     return out(cap, cap === usageCap(usage) ? 'usage-cap' : 'advisor-cap', { ...state, votes: [] });
   if (!dist) return out(capped(incumbent, cap), 'no-advice', state);
   // Too unsure to move: the model stays. Where the advice points at the model already running, there was no move to
@@ -130,10 +141,14 @@ export function decide(input: DecideInput): Decision {
     return out(kept, capped(mostLikely(dist), cap) === kept ? 'stay' : 'low-confidence', state);
   }
 
-  const choice = capped(mostLikely(dist), cap);
+  const top = input.top ?? 'fable';
+  const beyond = rank(incumbent) > rank(top);
+  const named = capped(mostLikely(dist), cap);
+  const choice = beyond && named === top ? incumbent : named;
   const votes = [...state.votes.slice(-2), choice];
   const next: PolicyState = { ...state, votes };
-  if (state.tier === null) return out(choice, 'first', next);
+  const windows = input.windows ?? CONTEXT_WINDOW;
+  const fits = (t: Tier): boolean => !input.contextTokens || input.contextTokens <= windows[t] * POLICY.windowShare;
   if (state.hold > 0) return out(incumbent, 'hold', { ...next, hold: state.hold - 1 });
   if (choice === incumbent) return out(incumbent, 'stay', next);
 
@@ -146,19 +161,18 @@ export function decide(input: DecideInput): Decision {
     const jump = rank(choice) - rank(incumbent) >= 2 && mass >= Math.max(bar, POLICY.jumpBar);
     const needed = mass >= bar + POLICY.strongMargin ? 1 : POLICY.votes;
     const count = streak(votes, (t) => rank(t) > rank(incumbent));
-    if (jump) return out(choice, 'jump', next, bar, mass);
-    if (mass >= bar && count >= needed) {
-      // Move one tier at a time unless the answer jumped.
-      const target = TIERS[rank(incumbent) + 1];
-      return out(capped(target, cap), 'upgrade', next, bar, mass);
-    }
+    if (jump && fits(choice)) return out(choice, 'jump', next, bar, mass);
+    // Move one tier at a time unless the answer jumped.
+    const target = capped(TIERS[rank(incumbent) + 1], cap);
+    if (mass >= bar && count >= needed && fits(target)) return out(target, 'upgrade', next, bar, mass);
     return out(incumbent, 'stay', next, bar, mass);
   }
 
   // A cheaper tier: never in the middle of a task, where the cache and the work so far are on the current model.
   if (input.continuation >= POLICY.continuationBar) return out(incumbent, 'same-task', next);
   const bar = Math.max(0.5, Math.min(0.97, POLICY.downgradeBar + cache - shift));
-  for (const target of TIERS.filter((t) => rank(t) >= rank(choice) && rank(t) < rank(incumbent))) {
+  const ceiling = beyond ? top : incumbent;
+  for (const target of TIERS.filter((t) => rank(t) >= rank(choice) && rank(t) < rank(ceiling) && fits(t))) {
     const mass = atOrBelow(dist, target);
     const count = streak(votes, (t) => rank(t) <= rank(target));
     if (mass >= bar && count >= POLICY.votes) return out(target, 'downgrade', next, bar, mass);

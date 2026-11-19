@@ -125,6 +125,14 @@ export function warmupBody(endpoint: Endpoint) {
   };
 }
 
+/** A request that has not settled after this long no longer holds the next one back. */
+export const STALE_REQUEST_MS = 60_000;
+
+/** Whether a request sent at `since` still holds the next one back; null is no request at all. */
+export function stillRunning(since: number | null, now: number): boolean {
+  return since !== null && now - since < STALE_REQUEST_MS;
+}
+
 const ACTIVITIES: Record<Activity, string> = {
   code: 'Produces changed code or config: features, fixes with a known cause, refactors, tests',
   debug: 'Produces a found cause: failing tests, stack traces, unexplained behavior',

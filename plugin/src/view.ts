@@ -135,12 +135,12 @@ const pct = (x: number | null | undefined, scale = 1) =>
   typeof x === 'number' && Number.isFinite(x) ? `${Math.round(x * scale)}%` : '?';
 
 /**
- * The move's reason. A stay that fell short of its bar, and advice too unsure to follow, say which way the model was
- * waiting to go.
+ * The move's reason. A stay with a bar is a move that did not happen yet (short of the bar, or of a second vote), and
+ * it says which way the model was waiting to go, as advice too unsure to follow does.
  */
 export function reasonText(d: Decision): string {
-  const short = d.reason === 'stay' && typeof d.bar === 'number' && typeof d.mass === 'number' && d.mass < d.bar;
-  if ((short || d.reason === 'low-confidence') && d.distribution) {
+  const waiting = d.reason === 'stay' && typeof d.bar === 'number';
+  if ((waiting || d.reason === 'low-confidence') && d.distribution) {
     return rank(mostLikely(d.distribution)) > rank(d.tier) ? '… waiting to go up' : '… waiting to go down';
   }
   return SHORT_REASON[d.reason] ?? d.reason;

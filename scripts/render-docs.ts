@@ -81,7 +81,7 @@ const journal: JournalRecord[] = tiers.map((tier, i) => ({
   at: NOW + i * 60_000,
   mode: 'route',
   tier,
-  reason: i === 0 ? 'first' : tier === tiers[i - 1] ? 'stay' : tier === 'opus' ? 'jump' : 'downgrade',
+  reason: i === 0 || tier === tiers[i - 1] ? 'stay' : tier === 'opus' ? 'jump' : 'downgrade',
   difficulty: tier === 'opus' ? 3.6 : tier === 'sonnet' ? 2.1 : 0.8,
   confidence: 0.8,
   activity: tier === 'opus' ? 'code' : 'explore',

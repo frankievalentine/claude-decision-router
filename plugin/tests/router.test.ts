@@ -173,8 +173,8 @@ const engineDraws = (on: any) => on('ui.render', () => ({ type: 'Text', props: {
 
 // --- Routing ---
 
-test('route mode sends an easy task to Haiku and a very hard one straight to Opus', KEYS, async ($, on) => {
-  const setup: Setup = { mode: 'route', level: 0 }
+test('route mode keeps an easy task on Haiku and sends a very hard one straight to Opus', KEYS, async ($, on) => {
+  const setup: Setup = { mode: 'route', level: 0, native: 'claude-haiku-5-5' }
   const seen = stubs(on, setup)
   await start($)
   await turn($, 't1', 'where is parseConfig defined?')
@@ -201,9 +201,12 @@ test('watch mode changes nothing but shows the pick', KEYS, async ($, on) => {
   const seen = stubs(on, { mode: 'watch', level: 0 })
   await start($)
   await turn($, 't1', 'list the files')
-  expect(seen.models[0]).toBe('claude-opus-5-5')
+  // The pick starts from the session's model and waits for a second answer before going down.
+  expect((await $.command.run({ command: 'router', args: 'status' })).text).toMatch(/^opus exploring → Opus 5\.5 · medium · watch only · … waiting to go down/)
+  await turn($, 't2', 'and the tests?')
+  expect(seen.models).toEqual(['claude-opus-5-5', 'claude-opus-5-5'])
   const status = await $.command.run({ command: 'router', args: 'status' })
-  expect(status.text).toMatch(/^haiku exploring → Haiku 5\.5 · low · watch only · • first pick/)
+  expect(status.text).toMatch(/^haiku exploring → Haiku 5\.5 · low · watch only · ↓ downgrade/)
 })
 
 test('a continuation turn asks nothing and keeps the route', KEYS, async ($, on) => {
@@ -223,7 +226,7 @@ test('near the plan limit the top tier is capped', KEYS, async ($, on) => {
 })
 
 test('ultrathink keeps its xhigh effort on a routed turn', KEYS, async ($, on) => {
-  const seen = stubs(on, { mode: 'route', level: 2 })
+  const seen = stubs(on, { mode: 'route', level: 2, native: 'claude-sonnet-5-5' })
   await start($)
   await $.turn.start({ turnId: 't1', text: 'ultrathink about this refactor' })
   await step($, 't1', 0, 'xhigh')
@@ -232,7 +235,7 @@ test('ultrathink keeps its xhigh effort on a routed turn', KEYS, async ($, on) =
 })
 
 test('repeated tool errors escalate mid-turn', KEYS, async ($, on) => {
-  const seen = stubs(on, { mode: 'route', level: 1 })
+  const seen = stubs(on, { mode: 'route', level: 1, native: 'claude-haiku-5-5' })
   await start($)
   await $.turn.start({ turnId: 't1', text: 'rename the helper' })
   await step($, 't1', 0)
@@ -240,6 +243,29 @@ test('repeated tool errors escalate mid-turn', KEYS, async ($, on) => {
   await step($, 't1', 1)
   expect(seen.models).toEqual(['claude-haiku-5-5', 'claude-sonnet-5-5'])
   expect(seen.toasts).toContain('Model changed: Haiku 5.5 · low → Sonnet 5.5 · low · tool errors')
+})
+
+test('a pick of the session\'s own tier leaves the request\'s model as it is', KEYS, async ($, on) => {
+  const seen = stubs(on, { mode: 'route', level: 3, native: 'opus[1m]' })
+  await start($)
+  const stream = $.turn.step({ turnId: 't1', index: 0, model: 'opus[1m]', messageCount: 1, effort: 'medium' })
+  await $.turn.start({ turnId: 't1', text: 'fix the flaky integration test' })
+  let s = await stream.next()
+  while (s.done !== true) s = await stream.next()
+  expect(seen.models).toEqual(['opus[1m]'])
+})
+
+test('after /model, routing starts again from the model picked by hand', KEYS, async ($, on) => {
+  const setup: Setup = { mode: 'route', level: 0, native: 'claude-haiku-5-5' }
+  const seen = stubs(on, setup)
+  await start($)
+  await turn($, 't1', 'where is main?')
+  setup.native = 'claude-opus-5-5'
+  await $.command.run({ command: 'model', args: 'opus', origin: { kind: 'composer' } })
+  await $.command.run({ command: 'router', args: 'on' })
+  // One easy answer does not undo the choice: Opus stays until a second one agrees.
+  await turn($, 't2', 'and what calls it?')
+  expect(seen.models).toEqual(['claude-haiku-5-5', 'claude-opus-5-5'])
 })
 
 // --- The advisor ---
@@ -292,7 +318,7 @@ test('the advisor turned off in the environment is ignored', KEYS, async ($, on)
 })
 
 test('a turn the advisor weighed in on does not escalate after tool errors', KEYS, async ($, on) => {
-  const seen = stubs(on, { mode: 'route', level: 1, advisor: true })
+  const seen = stubs(on, { mode: 'route', level: 1, advisor: true, native: 'claude-haiku-5-5' })
   await start($)
   await $.turn.start({ turnId: 't1', text: 'rename the helper' })
   await step($, 't1', 0)
@@ -311,13 +337,14 @@ test('an advisor seen in use but not in the settings holds routing at the sessio
   await turn($, 't2', 'and what calls it?')
   setup.level = 4
   await turn($, 't3', 'redesign the scheduler')
-  expect(seen.models).toEqual(['claude-haiku-5-5', 'claude-haiku-5-5', 'claude-sonnet-5-5'])
+  // The Sonnet session moves down on the second easy answer.
+  expect(seen.models).toEqual(['claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-sonnet-5-5'])
   const status = await $.command.run({ command: 'router', args: 'status' })
   expect(status.text).toMatch(/Advisor: on\. Routing stays at sonnet or below/)
 })
 
 test('a model switch names the move and its evidence', KEYS, async ($, on) => {
-  const setup: Setup = { mode: 'route', level: 0 }
+  const setup: Setup = { mode: 'route', level: 0, native: 'claude-haiku-5-5' }
   const seen = stubs(on, setup)
   await start($)
   await turn($, 't1', 'list the routes')
@@ -327,7 +354,7 @@ test('a model switch names the move and its evidence', KEYS, async ($, on) => {
 })
 
 test('a pin serves one turn without asking the decision model', KEYS, async ($, on) => {
-  const seen = stubs(on, { mode: 'route', level: 0 })
+  const seen = stubs(on, { mode: 'route', level: 0, native: 'claude-haiku-5-5' })
   await start($)
   await turn($, 't1', 'where is main?')
   expect((await $.command.run({ command: 'router', args: 'pin opus' })).text).toBe('The next turn runs on opus.')
@@ -338,9 +365,11 @@ test('a pin serves one turn without asking the decision model', KEYS, async ($, 
 })
 
 test('picking a model by hand pauses routing and is recorded', KEYS, async ($, on) => {
-  const seen = stubs(on, { mode: 'route', level: 0 })
+  const setup: Setup = { mode: 'route', level: 0, native: 'claude-haiku-5-5' }
+  const seen = stubs(on, setup)
   await start($)
   await turn($, 't1', 'what does this flag do?')
+  setup.native = 'claude-opus-5-5'
   await $.command.run({ command: 'model', args: 'opus', origin: { kind: 'composer' } })
   await turn($, 't2', 'what about this one?')
   expect(seen.models).toEqual(['claude-haiku-5-5', 'claude-opus-5-5'])
@@ -360,7 +389,7 @@ test('a timeout names the host and keeps the model', KEYS, async ($, on) => {
   const stepping = step($, 't1', 0)
   await seen.clock.advance(3000)
   await stepping
-  expect(seen.models[0]).toBe('claude-sonnet-5-5')
+  expect(seen.models[0]).toBe('claude-opus-5-5')
   const log = await $.command.run({ command: 'router', args: 'log' })
   expect(log.text).toMatch(/error: timed out after 2\.5 s at api\.cloudflare\.com/)
 })
@@ -421,7 +450,7 @@ test('the band draws the meter, tier pill, activity, route, reason and readings'
   const activity = await ui.find({ type: 'Text', text: 'debugging → ' })
   expect(activity?.props.italic).toBe(true)
   expect(await ui.find({ type: 'Text', text: 'Opus 5.5 · high' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: '• first pick' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '= fits' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'Balanced (default)' })).toBeDefined()
   expect((await ui.find({ type: 'Text', text: '10%' }))?.props.color).toBe('green')
   expect((await ui.find({ type: 'Text', text: '40%' }))?.props.color).toBe('green')
@@ -491,7 +520,7 @@ test('in the terminal the band leaves the space above the prompt; the desktop ap
 })
 
 test('the band confirms the model the API reports answering, and the log keeps it', KEYS, async ($, on) => {
-  const seen = stubs(on, { mode: 'route', level: 0, answer: 'claude-haiku-5-5-20261101' })
+  const seen = stubs(on, { mode: 'route', level: 0, answer: 'claude-haiku-5-5-20261101', native: 'claude-haiku-5-5' })
   engineDraws(on)
   await start($)
   await turn($, 't1', 'where is parseConfig defined?')
@@ -507,7 +536,7 @@ test('the band confirms the model the API reports answering, and the log keeps i
 })
 
 test('a reply from another model than the one asked for is flagged, not confirmed', KEYS, async ($, on) => {
-  stubs(on, { mode: 'route', level: 0, answer: 'claude-sonnet-5-5' })
+  stubs(on, { mode: 'route', level: 0, answer: 'claude-sonnet-5-5', native: 'claude-haiku-5-5' })
   engineDraws(on)
   await start($)
   await turn($, 't1', 'where is parseConfig defined?')
@@ -548,7 +577,7 @@ test('without a reported model nothing is confirmed, and watching never shows a 
 })
 
 test('the session row is switched on from the pane', KEYS, async ($, on) => {
-  const seen = stubs(on, { mode: 'route', level: 0 })
+  const seen = stubs(on, { mode: 'route', level: 0, native: 'claude-haiku-5-5' })
   engineDraws(on)
   await start($)
   await turn($, 't1', 'list the files')
@@ -714,7 +743,7 @@ test('settings saved by earlier versions keep working', KEYS, async ($, on) => {
 })
 
 test('settings saved as labels are read as their values', { options: { mode: 'Switch models', backend: 'llama.cpp server', preference: 'Save usage', local_url: 'http://10.0.0.9:9931' } }, async ($, on) => {
-  const seen = stubs(on, { level: 0, settings: SAVED({ mode: 'Switch models', backend: 'llama.cpp server', preference: 'Save usage' }) })
+  const seen = stubs(on, { level: 0, settings: SAVED({ mode: 'Switch models', backend: 'llama.cpp server', preference: 'Save usage' }), native: 'claude-haiku-5-5' })
   await start($)
   expect(seen.config).toEqual([])
   await turn($, 't1', 'where is main?')
@@ -742,13 +771,14 @@ test('a task split between two levels of the same tier is not low confidence', K
   await start($)
   await turn($, 't1', 'rename the helper in the settings file')
   const [record] = seen.store.get('decision-router:journal') as any[]
-  // The difficulty answer alone is 0.375, under the 0.45 bar; the tier is certain.
-  expect(record.reason).toBe('first')
+  // The difficulty answer alone is 0.375, under the 0.45 bar; the tier is certain, so the Opus session waits for a
+  // second answer to move down rather than calling it unsure.
+  expect(record.reason).toBe('stay')
   expect(record.confidence).toBe(1)
 })
 
 test('a split between tiers is low confidence, and the journal keeps which way the model leaned', KEYS, async ($, on) => {
-  const seen = stubs(on, { mode: 'route', fetch: withAnswers(SPLIT_TIERS) })
+  const seen = stubs(on, { mode: 'route', fetch: withAnswers(SPLIT_TIERS), native: 'claude-sonnet-5-5' })
   await start($)
   await turn($, 't1', 'rework the sync engine')
   const [record] = seen.store.get('decision-router:journal') as any[]
@@ -841,7 +871,7 @@ test('the pane shows the next turn, why, pins with odds, session, plan and conte
   expect((await ui.find({ type: 'Text', text: /^Clef Flash ready · \d+ ms$/ }))?.props.color).toBe('green')
   expect(await ui.find({ type: 'Text', text: 'Opus 5.5 · high' })).toBeDefined()
   expect((await ui.find({ type: 'Text', text: 'debugging' }))?.props.color).toBe('#d77757')
-  expect(await ui.find({ type: 'Text', text: 'first pick of the session' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'the current model fits' })).toBeDefined()
   expect((await ui.find({ key: 'pin-opus' }))?.props.label).toBe('opus 100%')
   expect(await ui.find({ type: 'Text', text: /^ · since \d\d:\d\d · 1 routed turn · 0 switches$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'PLAN' })).toBeDefined()
@@ -858,7 +888,7 @@ test('the pane shows the next turn, why, pins with odds, session, plan and conte
 })
 
 test('settings saved under the old router-enhanced name carry over', KEYS, async ($, on) => {
-  const seen = stubs(on, { level: 0 })
+  const seen = stubs(on, { level: 0, native: 'claude-haiku-5-5' })
   seen.store.set('router-enhanced:mode', 'route')
   seen.store.set('router-enhanced:journal', [{ at: 1, mode: 'route', tier: 'opus', reason: 'first', difficulty: 3, confidence: 0.9, activity: 'debug', usedPercent: 10, latencyMs: 300, error: null, outcome: 'ok' }])
   await start($)
@@ -1057,8 +1087,10 @@ test('failures while watching subagents do not pause main routing', KEYS, async 
   expect(faults[0]).toMatch(/HTTP 500/)
   expect(faults[4]).toMatch(/paused for a minute/)
   setup.fetch = undefined
+  // Two answers in a row move the Opus session down: main routing was never paused.
   await turn($, 't1', 'where is parseConfig?')
-  expect(seen.models[0]).toBe('claude-haiku-5-5')
+  await turn($, 't2', 'and where is it called?')
+  expect(seen.models.slice(-2)).toEqual(['claude-opus-5-5', 'claude-haiku-5-5'])
 })
 
 test('tokens and tool errors are added up per subagent and saved when it finishes', KEYS, async ($, on) => {

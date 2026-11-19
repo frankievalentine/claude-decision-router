@@ -10,6 +10,12 @@ export const MODEL_IDS: Record<Tier, string> = {
   fable: 'claude-fable-5-2',
 };
 
+/**
+ * Each model's context window in tokens, from Anthropic's model table. A conversation that has outgrown a model's
+ * window cannot move to it.
+ */
+export const CONTEXT_WINDOW: Record<Tier, number> = { haiku: 1_000_000, sonnet: 1_000_000, opus: 1_000_000, fable: 1_000_000 };
+
 export const TIER_NAMES: Record<Tier, string> = { haiku: 'Haiku', sonnet: 'Sonnet', opus: 'Opus', fable: 'Fable' };
 
 /** Effort each tier starts from; reasoning depth moves it one step either way. */

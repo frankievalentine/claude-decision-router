@@ -2,7 +2,7 @@
 // draws, and this file only wires Claude Code's events to that logic. Every mods API call lives here, written in full,
 // so Claude Code can list what the mod does before it runs.
 
-import { backendOf, buildBody, endpointFor, hostOf, parseAnswers, warmupBody } from '../src/classifier.ts';
+import { backendOf, buildBody, endpointFor, hostOf, parseAnswers, stillRunning, warmupBody } from '../src/classifier.ts';
 import type { Endpoint } from '../src/classifier.ts';
 import { tierConfidence, tierDistribution } from '../src/features.ts';
 import { append, markAnswered, markEscalated, markOverride, recordOf, tune } from '../src/journal.ts';
@@ -63,7 +63,6 @@ const MAX_WAIT_MS = 9000;
 const SETUP_TIMEOUT_MS = MAX_WAIT_MS;
 const FAILURES_TO_PAUSE = 3;
 const PAUSE_MS = 60_000;
-const BASELINE: Tier = 'sonnet';
 // Subagents waiting for the decision model. A larger burst goes unasked rather than building a long line.
 const MAX_SPAWN_QUEUE = 8;
 const SPAWN_WAIT_STEP_MS = 100;
@@ -101,8 +100,9 @@ let escalatedTurn: string | null = null;
 let failures = 0;
 let pausedUntil = 0;
 // A request still waiting for its server. $.http.fetch cannot be cancelled, so a timed-out request runs on; no new
-// one is sent until it settles, which keeps a slow server from receiving a backlog of requests nobody reads.
-let inFlight = false;
+// one is sent until it settles, which keeps a slow server from receiving a backlog of requests nobody reads. One that
+// never settles is given up on after a minute, so a hung connection cannot stop routing for the whole session.
+let inFlight: { since: number } | null = null;
 const jobs = new Map<string, Promise<Advice>>();
 // Subagents keep to themselves: their own log, their own line and their own failure count, so they cannot take a main
 // turn's request, push out the main log or pause main routing.
@@ -207,7 +207,7 @@ export function register(on: any, opts: Options) {
     if (e.agentId) {
       const routed = spawnMode === 'on' ? spawnRoutes.get(e.agentId) : undefined;
       if (routed && routed.toolErrors >= POLICY.escalateAfterErrors && !routed.escalated && !routed.advised) await escalateSpawn($, e.agentId, routed);
-      const result = yield* next(routed ? { ...e, model: routed.route.model, effort: requestEffort(routed.route.effort, e.effort) } : e);
+      const result = yield* next(routed ? { ...e, model: modelFor(routed.route, e.model), effort: requestEffort(routed.route.effort, e.effort) } : e);
       if (result?.usage) spawnLog = updateSpawn(spawnLog, e.agentId, (r) => addUsage(r, result.usage));
       if (routed && advised(result)) routed.advised = true;
       return result;
@@ -243,7 +243,7 @@ export function register(on: any, opts: Options) {
       // Only a routed turn escalates: watching, nothing would change. A pinned turn keeps the model you chose, and a
       // turn in which the advisor was consulted keeps its model, so the guidance gets the chance a stronger model would
       // have had and the prompt cache stays.
-      const up = escalate(policy, BASELINE, { usedPercent }, advisorCap(), escalationTop(current?.features ?? null));
+      const up = escalate(policy, baseline(), { usedPercent }, advisorCap(), escalationTop(current?.features ?? null));
       escalatedTurn = e.turnId;
       if (up) {
         const before = current?.route ?? null;
@@ -257,7 +257,7 @@ export function register(on: any, opts: Options) {
     }
     const request =
       mode === 'route' && current?.route
-        ? { ...e, model: current.route.model, effort: requestEffort(current.route.effort, e.effort) }
+        ? { ...e, model: modelFor(current.route, e.model), effort: requestEffort(current.route.effort, e.effort) }
         : e;
     const result = yield* next(request);
     readCache(result?.usage);
@@ -311,6 +311,9 @@ export function register(on: any, opts: Options) {
       nativeModel = await $.session.model();
       journal = markOverride(journal, tierOfModel(nativeModel));
       await $.store.set(JOURNAL_KEY, journal);
+      // The model picked by hand is where routing starts again once it is turned back on.
+      policy = initialState();
+      current = null;
       paused = true;
       $.ui.toast('Router paused: you picked a model. Turn on from the band, or /router on.');
       $.ui.invalidate('ui.render');
@@ -713,7 +716,7 @@ async function connectionOf($: any): Promise<{ endpoint: Endpoint; key: string |
 
 async function classify($: any, text: string): Promise<Advice> {
   if (Date.now() < pausedUntil) return { features: null, error: 'paused for a minute after 3 failures', latencyMs: null };
-  if (inFlight) return { features: null, error: 'the previous request is still running', latencyMs: null };
+  if (busy()) return { features: null, error: 'the previous request is still running', latencyMs: null };
   const connection = await connectionOf($);
   if ('error' in connection) return { features: null, error: connection.error, latencyMs: null };
   const { endpoint, key } = connection;
@@ -723,16 +726,14 @@ async function classify($: any, text: string): Promise<Advice> {
   try {
     const recent = await recentDialogue($);
     const prompt = text.slice(0, 6000);
-    inFlight = true;
+    const mine = { since: started };
+    inFlight = mine;
     const call = askSystemOne($, endpoint, key, prompt, recent);
-    call.then(
-      () => {
-        inFlight = false;
-      },
-      () => {
-        inFlight = false;
-      },
-    );
+    // Only its own mark: a request given up on may settle while a later one is running.
+    const settle = () => {
+      if (inFlight === mine) inFlight = null;
+    };
+    call.then(settle, settle);
     const response = await Promise.race([call, $.clock.sleep(timeoutMs).then(() => null)]);
     if (!response) throw new Error(`timed out after ${timeoutMs / 1000} s at ${where}`);
     const features = parseAnswers(response);
@@ -868,7 +869,7 @@ async function drainSpawns($: any) {
       const connection = await connectionOf($);
       const limit = 'error' in connection ? 0 : timeoutOf(connection.endpoint);
       let waited = 0;
-      while (inFlight && waited < limit) {
+      while (busy() && waited < limit) {
         await $.clock.sleep(SPAWN_WAIT_STEP_MS);
         waited += SPAWN_WAIT_STEP_MS;
       }
@@ -887,7 +888,7 @@ async function drainSpawns($: any) {
 // messages describe something else.
 async function adviceForSpawn($: any, connection: { endpoint: Endpoint; key: string | null } | { error: string }, prompt: string): Promise<Advice> {
   if ('error' in connection) return { features: null, error: connection.error, latencyMs: null };
-  if (inFlight) return { features: null, error: 'a main turn was still asking', latencyMs: null };
+  if (busy()) return { features: null, error: 'a main turn was still asking', latencyMs: null };
   if (Date.now() < pausedUntil || Date.now() < spawnPausedUntil) return { features: null, error: 'paused for a minute after 3 failures', latencyMs: null };
   const { endpoint, key } = connection;
   const timeoutMs = timeoutOf(endpoint);
@@ -984,30 +985,40 @@ async function decideTurn($: any, advice: Advice) {
     contextTokens,
     preference,
     minConfidence: typeof options.min_confidence === 'number' ? options.min_confidence : 0.45,
-    baseline: BASELINE,
+    baseline: baseline(),
     advisor: advisorCap(),
+    top: allowFable ? 'fable' : 'opus',
   });
   policy = decision.state;
   lastError = advice.error;
   if (advice.latencyMs !== null && !advice.error) lastLatency = advice.latencyMs;
   current = { decision, route: await routeOf($, decision.tier, f), features: f };
-  await record($, decision, f, advice.latencyMs, advice.error);
+  await record($, decision, f, advice.latencyMs, advice.error, preference, contextTokens);
 }
 
 // A pin serves one turn and leaves the policy's tier where it was, as in claude-router. It stays at or below the
 // advisor's tier, as routing does.
 async function pinTurn($: any, pinned: Tier) {
-  await readUsage($);
+  const contextTokens = await readUsage($);
   pin = null;
   const cap = advisorCap();
   const tier = cap && rank(pinned) > rank(cap) ? cap : pinned;
   const decision: Decision = { tier, reason: 'pinned', distribution: null, bar: null, mass: null, state: policy };
+  const preference = pick(options.preference, ['cost', 'balanced', 'quality'] as const, 'balanced') as Preference;
   current = { decision, route: await routeOf($, tier, null), features: null };
-  await record($, decision, null, null, null);
+  await record($, decision, null, null, null, preference, contextTokens);
 }
 
-async function record($: any, decision: Decision, f: Features | null, latencyMs: number | null, error: string | null) {
-  journal = append(journal, recordOf({ at: Date.now(), mode, decision, features: f, usedPercent, windows, latencyMs, error }));
+async function record(
+  $: any,
+  decision: Decision,
+  f: Features | null,
+  latencyMs: number | null,
+  error: string | null,
+  preference: Preference,
+  contextTokens: number | null,
+) {
+  journal = append(journal, recordOf({ at: Date.now(), mode, decision, features: f, usedPercent, windows, latencyMs, error, preference, contextTokens }));
   await $.store.set(JOURNAL_KEY, journal);
 }
 
@@ -1053,6 +1064,15 @@ async function routeOf($: any, tier: Tier, f: Features | null): Promise<Route | 
 
 // --- Plain functions ---
 
+// Routing starts from the session's own model: an unsure or missing answer keeps it, and a move away needs the policy's
+// evidence. Sonnet stands in for a model the router does not know.
+const baseline = (): Tier => tierOfModel(nativeModel) ?? 'sonnet';
+
+// The model a routed request goes out on. A pick of the tier the request already asks for leaves its model as it is:
+// the session's own id may carry a context variant ("opus[1m]") or name another version of that tier.
+const modelFor = (route: Route, asked: unknown): string =>
+  typeof asked === 'string' && tierOfModel(asked) === tierOfModel(route.model) ? asked : route.model;
+
 const advised = (result: any): boolean => Array.isArray(result?.serverToolUses) && result.serverToolUses.some((u: any) => u?.name === 'advisor');
 
 /**
@@ -1086,6 +1106,8 @@ function escalationTop(features: Features | null): Tier {
 function advisorText(): string {
   return advisorModel ? modelName(advisorModel) : 'on';
 }
+
+const busy = (): boolean => stillRunning(inFlight?.since ?? null, Date.now());
 
 function endpointOf(account?: string | null) {
   return endpointFor({

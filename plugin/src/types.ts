@@ -35,7 +35,7 @@ export type Settings = {
   preference: Preference;
   allowFable: boolean;
   minConfidence: number;
-  /** Tier used before any decision, and when the classifier is unsure. */
+  /** The session's own tier: kept before any decision and when the classifier is unsure. */
   baseline: Tier;
 };
 
@@ -49,6 +49,7 @@ export type PolicyState = {
 };
 
 export type Reason =
+  /** Records from before 0.13, when the first decision of a session took the pick without a bar. */
   | 'first'
   | 'stay'
   | 'upgrade'

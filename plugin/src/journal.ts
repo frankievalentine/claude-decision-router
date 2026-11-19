@@ -4,7 +4,7 @@
 
 import { mostLikely } from './features.ts';
 import { rank } from './tiers.ts';
-import type { Decision, Features, Mode, Reason, Tier } from './types.ts';
+import type { Activity, Decision, Distribution, Features, Mode, Preference, Reason, Scope, Tier } from './types.ts';
 
 export type Outcome = 'ok' | 'override-up' | 'override-down' | 'escalated';
 
@@ -28,7 +28,40 @@ export type JournalRecord = {
   sevenDay?: number | null;
   /** The model the API reported answering the turn's latest reply. Absent before 0.12.1 and for a turn with no reply. */
   answered?: string | null;
+  /**
+   * The rest of what a decision needs to be worked out again under other settings: the decision model's answers
+   * (rounded), the Priority, and the context size that set the cache bar. Absent before 0.13; `answers` is null
+   * without advice.
+   */
+  answers?: Answers | null;
+  preference?: Preference;
+  contextTokens?: number | null;
 };
+
+/** The decision model's answers as the log keeps them: numbers only, rounded to two places. */
+export type Answers = {
+  difficulty: number[];
+  reasoning: number;
+  scope: Distribution<Scope>;
+  activity: Distribution<Activity>;
+  security: number;
+  continuation: number;
+};
+
+const round2 = (x: number): number => Math.round(x * 100) / 100;
+const roundAll = <K extends string>(d: Distribution<K>): Distribution<K> =>
+  Object.fromEntries(Object.entries(d).map(([k, p]) => [k, round2(Number(p) || 0)])) as Distribution<K>;
+
+export function answersOf(f: Features): Answers {
+  return {
+    difficulty: f.difficulty.map(round2),
+    reasoning: round2(f.reasoning),
+    scope: roundAll(f.scope),
+    activity: roundAll(f.activity),
+    security: round2(f.security),
+    continuation: round2(f.continuation),
+  };
+}
 
 export const MAX_RECORDS = 400;
 
@@ -41,6 +74,8 @@ export function recordOf(args: {
   windows?: { fiveHour: number | null; sevenDay: number | null };
   latencyMs: number | null;
   error: string | null;
+  preference?: Preference;
+  contextTokens?: number | null;
 }): JournalRecord {
   const f = args.features;
   const total = f ? f.difficulty.reduce((s, p) => s + p, 0) || 1 : 1;
@@ -60,6 +95,9 @@ export function recordOf(args: {
     lean: args.decision.distribution ? mostLikely(args.decision.distribution) : null,
     fiveHour: args.windows?.fiveHour ?? null,
     sevenDay: args.windows?.sevenDay ?? null,
+    answers: f ? answersOf(f) : null,
+    ...(args.preference ? { preference: args.preference } : {}),
+    contextTokens: args.contextTokens ?? null,
   };
 }
 
