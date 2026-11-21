@@ -296,7 +296,8 @@ export function bandSegments(s: Snapshot, a: Actions): Segment[] {
         0,
         part('○ ', { dimColor: true }),
         { ...part('Routing '), priority: 1 },
-        part(s.paused ? 'paused' : 'off', { backgroundColor: COLOR.off, color: COLOR.muted }),
+        // Padded like the tier pill, so the chip reads as one and the button after it has room.
+        part(` ${s.paused ? 'paused' : 'off'} `, { backgroundColor: COLOR.off, color: COLOR.muted }),
         part(' '),
         s.paused
           ? button({ key: 'band-resume', label: 'Turn on', variant: 'primary', onPress: a.resume })
